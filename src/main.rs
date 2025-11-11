@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
-const PLAYER_MOVEMENT_SPEED:f32 = 160.;
+const PLAYER_MOVEMENT_SPEED_NORMALIZED:f32 = 0.5;   // how much of the entire screen should the player travel per second
+const PLAYER_SIZE:f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE:f32 = 0.1;
 const TEXT_COLOR: Color = Color::hsv(0.0, 0.0, 0.5);
 const IDLE_BUTTON: Color = Color::hsv(0.0, 0.0, 1.0);
@@ -16,18 +17,28 @@ enum AppState {
 }
 
 #[derive(Component)]
-pub struct Player;
+struct Player;
 
-pub enum ControlDevice
+enum ControlDevice
 {
     Keyboard,
     Gamepad,
 }
 
 #[derive(Resource)]
-pub struct PrimaryControlDevice
+struct PrimaryControlDevice
 {
     value: ControlDevice,
+}
+
+#[derive(Resource)]
+struct DisplayProperties
+{
+    w: f32,
+    h: f32,
+    half_w: f32,
+    half_h: f32,
+    shorter_dimension: f32,
 }
 
 #[derive(Component)]
@@ -58,24 +69,92 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest())
         );
-    
+    app.insert_resource(DisplayProperties{w:640.,h:480.,half_w:320.,half_h:240.,shorter_dimension:480.});
+    app.insert_resource(PrimaryControlDevice{value: ControlDevice::Keyboard});
+
     app.add_systems(Startup, app_init);
     app.add_systems(OnEnter(AppState::Menu), main_menu_setup);
+    app.add_systems(OnEnter(AppState::InGame), spawn_player);
     app.add_systems(
         Update,
         (button_system, menu_action).run_if(in_state(AppState::Menu)),
     );
+    app.add_systems(FixedUpdate, move_player);
 
     app.init_state::<AppState>();
     app.run();
 }
 
-fn app_init(mut commands: Commands) {
+fn app_init(mut commands: Commands, window: Single<&Window>, mut display_properties: ResMut<DisplayProperties>) {
 
     commands.spawn((
         Camera2d::default(),
         Msaa::Off,
-));
+    ));
+
+    let w = window.resolution.physical_width();
+    let h = window.resolution.physical_height();
+
+    display_properties.w = w as f32;
+    display_properties.h = h as f32;
+    display_properties.half_w = display_properties.w / 2.;
+    display_properties.half_h = display_properties.h / 2.;
+    display_properties.shorter_dimension = if display_properties.w < display_properties.h {display_properties.w} else {display_properties.h};
+}
+
+fn spawn_player(
+  mut commands: Commands,
+  mut meshes: ResMut<Assets<Mesh>>,
+  mut materials: ResMut<Assets<ColorMaterial>>,
+  display_properties: Res<DisplayProperties>,
+)
+{
+    let mesh = meshes.add(Circle::new(display_properties.shorter_dimension * PLAYER_SIZE));
+    let material = materials.add(Color::srgb(1., 1., 1.));
+    commands.spawn((Player, Mesh2d(mesh), MeshMaterial2d(material), Transform::from_translation(Vec3::new(0., 0., 0.)),));
+}
+
+fn move_player(
+    keyboard_input: Res<ButtonInput<KeyCode>>, 
+    mut player: Single<&mut Transform, With<Player>>, 
+    gamepads: Query<(Entity, &Gamepad)>, 
+    mut primary_device: ResMut<PrimaryControlDevice>,
+    fixed_time: Res<Time<Fixed>>,
+    display_properties: Res<DisplayProperties>,)
+{
+    let mut movement_vector = Vec2::ZERO;
+
+    if keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp) || keyboard_input.pressed(KeyCode::KeyZ) {
+        movement_vector.y += 1.0;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+    if keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown) {
+        movement_vector.y -= 1.0;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+    if keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft) || keyboard_input.pressed(KeyCode::KeyQ) {
+        movement_vector.x -= 1.0;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+    if keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight) {
+        movement_vector.x += 1.0;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+
+    for (_entity, gamepad) in &gamepads {
+        let left_stick_x = gamepad.get(GamepadAxis::LeftStickX).unwrap();
+        if left_stick_x.abs() > GAMEPAD_STICK_DEADZONE {
+            movement_vector.x += left_stick_x;
+            primary_device.value = ControlDevice::Gamepad;
+        }
+        let left_stick_y = gamepad.get(GamepadAxis::LeftStickY).unwrap();
+        if left_stick_y.abs() > GAMEPAD_STICK_DEADZONE {
+            movement_vector.y += left_stick_y;
+            primary_device.value = ControlDevice::Gamepad;
+        }
+    }
+
+    player.translation += vec3(movement_vector.x, movement_vector.y, 0.).clamp_length_max(1.0) * fixed_time.delta_secs() * PLAYER_MOVEMENT_SPEED_NORMALIZED * display_properties.shorter_dimension;
 }
 
 // This system handles changing all buttons color based on mouse interaction
