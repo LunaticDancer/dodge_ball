@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    prelude::*,
+    window::WindowResized,
+};
 
 const PLAYER_MOVEMENT_SPEED_NORMALIZED:f32 = 0.5;   // how much of the entire screen should the player travel per second
 const PLAYER_SIZE:f32 = 0.02;
@@ -77,9 +80,15 @@ fn main() {
     app.add_systems(OnEnter(AppState::InGame), spawn_player);
     app.add_systems(
         Update,
-        (button_system, menu_action).run_if(in_state(AppState::Menu)),
+        (
+            (button_system, menu_action).run_if(in_state(AppState::Menu)),
+            resize_screen_bounds,
+        )
     );
-    app.add_systems(FixedUpdate, move_player);
+    app.add_systems(FixedUpdate, (
+        move_player,
+        clamp_player.after(move_player),
+    ));
 
     app.init_state::<AppState>();
     app.run();
@@ -91,15 +100,20 @@ fn app_init(mut commands: Commands, window: Single<&Window>, mut display_propert
         Camera2d::default(),
         Msaa::Off,
     ));
+}
 
-    let w = window.resolution.physical_width();
-    let h = window.resolution.physical_height();
+fn resize_screen_bounds(mut resize_reader: MessageReader<WindowResized>, window: Single<&Window>, mut display_properties: ResMut<DisplayProperties>)
+{
+    for _e in resize_reader.read() {
+        let w = window.resolution.physical_width();
+        let h = window.resolution.physical_height();
 
-    display_properties.w = w as f32;
-    display_properties.h = h as f32;
-    display_properties.half_w = display_properties.w / 2.;
-    display_properties.half_h = display_properties.h / 2.;
-    display_properties.shorter_dimension = if display_properties.w < display_properties.h {display_properties.w} else {display_properties.h};
+        display_properties.w = (w) as f32;
+        display_properties.h = (h) as f32;
+        display_properties.half_w = display_properties.w / 2.;
+        display_properties.half_h = display_properties.h / 2.;
+        display_properties.shorter_dimension = if display_properties.w < display_properties.h {display_properties.w} else {display_properties.h};
+    }
 }
 
 fn spawn_player(
@@ -155,6 +169,11 @@ fn move_player(
     }
 
     player.translation += vec3(movement_vector.x, movement_vector.y, 0.).clamp_length_max(1.0) * fixed_time.delta_secs() * PLAYER_MOVEMENT_SPEED_NORMALIZED * display_properties.shorter_dimension;
+}
+
+fn clamp_player(mut player: Single<&mut Transform, With<Player>>, display: Res<DisplayProperties>)
+{
+    player.translation = Vec3 { x: player.translation.x.clamp(-display.half_w, display.half_w), y: player.translation.y.clamp(-display.half_h, display.half_h), z: 0. }
 }
 
 // This system handles changing all buttons color based on mouse interaction
