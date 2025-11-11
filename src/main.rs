@@ -6,7 +6,7 @@ const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
 const TEXT_COLOR: Color = Color::hsv(0.0, 0.0, 0.5);
 const IDLE_BUTTON: Color = Color::hsv(0.0, 0.0, 1.0);
-const HOVERED_BUTTON: Color = Color::hsv(0.0, 0.0, 0.8);
+const HOVERED_BUTTON: Color = Color::hsv(0.0, 0.0, 0.2);
 const PRESSED_BUTTON: Color = Color::hsv(0.0, 0.0, 0.6);
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
@@ -90,7 +90,7 @@ fn main() {
     app.insert_resource(Score { value: 0.0 });
 
     app.add_systems(Startup, app_init);
-    app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player));
+    app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, reset_score));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
     app.add_systems(OnExit(AppState::Menu), (spawn_player, gameplay_ui_setup));
     app.add_systems(
@@ -134,14 +134,28 @@ fn resize_screen_bounds(
     }
 }
 
-fn handle_score(time: Res<Time<Virtual>>, mut score: ResMut<Score>, mut display: Query<&mut Text, With<ScoreDisplay>>) {
-    score.value += time.delta_secs();
+fn reset_score(mut score: ResMut<Score>)
+{
+    score.value = 0.;
+}
 
-    let ms = (score.value * 100.) as u32;
+fn handle_score(time: Res<Time<Virtual>>, mut score: ResMut<Score>, display: Query<&mut Text, With<ScoreDisplay>>) {
+    score.value += time.delta_secs();
+    let time_text: String = convert_time_to_text(score.value);
+
+    for mut text in display.into_iter()
+    {
+        text.0 = time_text.clone();
+    }
+}
+
+fn convert_time_to_text(time: f32) -> String{
+    let mut time_text: String = "".to_string();
+
+    let ms = (time * 100.) as u32;
     let s = (ms - (ms % 100))/100;
     let m = (s - (s % 60))/60;
 
-    let mut time_text: String = "".to_string();
     if m<10
     {
         time_text += "0";
@@ -160,10 +174,7 @@ fn handle_score(time: Res<Time<Virtual>>, mut score: ResMut<Score>, mut display:
     }
     time_text.push_str(&(ms%100).to_string());
 
-    for mut text in display.into_iter()
-    {
-        text.0 = time_text.clone();
-    }
+    time_text
 }
 
 fn despawn_player(mut commands: Commands, players: Query<(Entity, &Player)>) {
