@@ -1,6 +1,5 @@
 use bevy::{
-    prelude::*,
-    window::WindowResized,
+    prelude::*, state::commands, window::WindowResized
 };
 
 const PLAYER_MOVEMENT_SPEED_NORMALIZED:f32 = 0.5;   // how much of the entire screen should the player travel per second
@@ -48,6 +47,8 @@ struct DisplayProperties
 enum MenuButtonAction {
     Play,
     Quit,
+    Resume,
+    ToMenu,
 }
 
 #[derive(Component)]
@@ -76,13 +77,18 @@ fn main() {
     app.insert_resource(PrimaryControlDevice{value: ControlDevice::Keyboard});
 
     app.add_systems(Startup, app_init);
-    app.add_systems(OnEnter(AppState::Menu), main_menu_setup);
-    app.add_systems(OnEnter(AppState::InGame), spawn_player);
+    app.add_systems(OnEnter(AppState::Menu), (
+        main_menu_setup,
+        despawn_player,
+    ));
+    app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
+    app.add_systems(OnExit(AppState::Menu), spawn_player);
     app.add_systems(
         Update,
         (
-            (button_system, menu_action).run_if(in_state(AppState::Menu)),
+            (button_system, menu_action).run_if(in_state(AppState::Menu).or(in_state(AppState::Paused))),
             resize_screen_bounds,
+            handle_game_pausing,
         )
     );
     app.add_systems(FixedUpdate, (
@@ -94,7 +100,7 @@ fn main() {
     app.run();
 }
 
-fn app_init(mut commands: Commands, window: Single<&Window>, mut display_properties: ResMut<DisplayProperties>) {
+fn app_init(mut commands: Commands) {
 
     commands.spawn((
         Camera2d::default(),
@@ -113,6 +119,17 @@ fn resize_screen_bounds(mut resize_reader: MessageReader<WindowResized>, window:
         display_properties.half_w = display_properties.w / 2.;
         display_properties.half_h = display_properties.h / 2.;
         display_properties.shorter_dimension = if display_properties.w < display_properties.h {display_properties.w} else {display_properties.h};
+    }
+}
+
+fn despawn_player(
+    mut commands: Commands,
+    players: Query<(Entity, &Player)>,
+)
+{
+    for (entity_id, _) in players.iter()
+    {
+        commands.entity(entity_id).despawn();
     }
 }
 
@@ -176,6 +193,55 @@ fn clamp_player(mut player: Single<&mut Transform, With<Player>>, display: Res<D
     player.translation = Vec3 { x: player.translation.x.clamp(-display.half_w, display.half_w), y: player.translation.y.clamp(-display.half_h, display.half_h), z: 0. }
 }
 
+fn handle_game_pausing(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(Entity, &Gamepad)>, 
+    mut primary_device: ResMut<PrimaryControlDevice>,
+    mut time: ResMut<Time<Virtual>>,
+    mut game_state: ResMut<NextState<AppState>>,
+    state: Res<State<AppState>>,
+)
+{
+    let mut take_action: bool = false;
+    if keyboard_input.just_pressed(KeyCode::Escape) || keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Enter)
+    {
+        take_action = true;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+
+    for (_entity, gamepad) in &gamepads {
+        if take_action
+        {
+            break;
+        }
+
+        let just_pressed = gamepad.get_just_pressed().into_iter();
+        for button in just_pressed
+        {
+            if *button == GamepadButton::Select || *button == GamepadButton::Start
+            {
+                take_action = true;
+                primary_device.value = ControlDevice::Gamepad;
+                break;
+            }
+        }
+    }
+
+    if take_action
+    {
+        if *state.get() == AppState::InGame
+        {
+            time.pause();
+            game_state.set(AppState::Paused);
+        }
+        else if *state.get() == AppState::Paused
+        {
+            time.unpause();
+            game_state.set(AppState::InGame);
+        }
+    }
+}
+
 // This system handles changing all buttons color based on mouse interaction
 fn button_system(
     mut interaction_query: Query<
@@ -200,6 +266,7 @@ fn menu_action(
     >,
     mut app_exit_writer: MessageWriter<AppExit>,
     mut game_state: ResMut<NextState<AppState>>,
+    mut time: ResMut<Time<Virtual>>,
 ) {
     for (interaction, menu_button_action) in &interaction_query {
         if *interaction == Interaction::Pressed {
@@ -209,6 +276,14 @@ fn menu_action(
                 }
                 MenuButtonAction::Play => {
                     game_state.set(AppState::InGame);
+                }
+                MenuButtonAction::Resume => {
+                    game_state.set(AppState::InGame);
+                    time.unpause();
+                }
+                MenuButtonAction::ToMenu => {
+                    game_state.set(AppState::Menu);
+                    time.unpause();
                 }
             }
         }
@@ -271,6 +346,96 @@ fn main_menu_setup(mut commands: Commands, window: Single<&Window>,) {
                     children![
                         (
                             Text::new("Play"),
+                            button_text_font.clone(),
+                            TextColor(TEXT_COLOR),
+                        ),
+                    ]
+                ),
+                // exit button
+                (
+                    Button,
+                    button_node,
+                    BackgroundColor(IDLE_BUTTON),
+                    MenuButtonAction::Quit,
+                    children![
+                        (Text::new("Quit"), button_text_font, TextColor(TEXT_COLOR),),
+                    ]
+                ),
+            ]
+        )],
+    ));
+}
+
+fn pause_menu_setup(mut commands: Commands, window: Single<&Window>,) {
+    let w = window.resolution.physical_width();
+    let h = window.resolution.physical_height();
+
+    let button_node = Node {
+        width: px(w/4),
+        height: px(h/6),
+        margin: UiRect::all(px(h/32)),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        ..default()
+    };
+    let button_text_font = TextFont {
+        font_size: (h/12) as f32,
+        ..default()
+    };
+
+    commands.spawn((
+        DespawnOnExit(AppState::Paused),
+        Node {
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            // vertical layout box
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            children![
+                // game title
+                (
+                    Text::new("PAUSED"),
+                    TextFont {
+                        font_size: (h/6) as f32,
+                        ..default()
+                    },
+                    TextColor(TEXT_COLOR),
+                    Node {
+                        margin: UiRect::all(px(h/32)),
+                        ..default()
+                    },
+                ),
+                // resume button
+                (
+                    Button,
+                    button_node.clone(),
+                    BackgroundColor(IDLE_BUTTON),
+                    MenuButtonAction::Resume,
+                    children![
+                        (
+                            Text::new("Resume"),
+                            button_text_font.clone(),
+                            TextColor(TEXT_COLOR),
+                        ),
+                    ]
+                ),
+                // to menu button
+                (
+                    Button,
+                    button_node.clone(),
+                    BackgroundColor(IDLE_BUTTON),
+                    MenuButtonAction::ToMenu,
+                    children![
+                        (
+                            Text::new("To Menu"),
                             button_text_font.clone(),
                             TextColor(TEXT_COLOR),
                         ),
