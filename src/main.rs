@@ -12,6 +12,7 @@ const PRESSED_BUTTON: Color = Color::hsv(0.0, 0.0, 0.6);
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 enum AppState {
     #[default]
+    Uninitialized,
     Menu,
     InGame,
     Paused,
@@ -89,7 +90,7 @@ fn main() {
     });
     app.insert_resource(Score { value: 0.0 });
 
-    app.add_systems(Startup, app_init);
+    app.add_systems( PostUpdate, app_init.run_if(run_once));
     app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, reset_score));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
     app.add_systems(OnExit(AppState::Menu), (spawn_player, gameplay_ui_setup));
@@ -109,8 +110,12 @@ fn main() {
     app.run();
 }
 
-fn app_init(mut commands: Commands) {
+fn app_init(
+    mut commands: Commands,
+    mut game_state: ResMut<NextState<AppState>>,
+) {
     commands.spawn((Camera2d::default(), Msaa::Off));
+    game_state.set(AppState::Menu);
 }
 
 fn resize_screen_bounds(
@@ -359,6 +364,7 @@ fn main_menu_setup(
 ) {
     let w = window.resolution.physical_width();
     let h = window.resolution.physical_height();
+    println!("{}x{}", w, h);
 
     let font: Handle<Font> = asset_server.load(MAIN_FONT_PATH);
 
@@ -375,6 +381,43 @@ fn main_menu_setup(
         font_size: (h / 12) as f32,
         ..default()
     };
+
+    commands.spawn((
+        DespawnOnExit(AppState::Menu),
+        Text::new("LunaticDancer, 2025"),
+        TextFont
+        {
+            font: font.clone(),
+            font_size: (h / 20) as f32,
+            ..default()
+        },
+        TextColor(TEXT_COLOR),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(8),
+            left: px(8),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        DespawnOnExit(AppState::Menu),
+        Text::new("v: 0.1.0, made with Bevy"),
+        TextFont
+        {
+            font: font.clone(),
+            font_size: (h / 20) as f32,
+            ..default()
+        },
+        TextColor(TEXT_COLOR),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(8),
+            right: px(8),
+            ..default()
+        },
+    ));
+
 
     commands.spawn((
         DespawnOnExit(AppState::Menu),
