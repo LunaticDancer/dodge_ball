@@ -61,6 +61,9 @@ struct SelectedOption;
 struct Player;
 
 #[derive(Component)]
+struct ButtonsHolder;
+
+#[derive(Component)]
 struct ScoreDisplay;
 
 fn main() {
@@ -101,7 +104,7 @@ fn main() {
     app.add_systems(
         Update,
         (
-            (button_react_to_mouse_system, menu_action)
+            (button_react_to_mouse_system, button_react_to_keyboard_or_gamepad_system, menu_action)
                 .run_if(in_state(AppState::Menu).or(in_state(AppState::Paused))),
             resize_screen_bounds,
             handle_game_pausing,
@@ -288,7 +291,6 @@ fn handle_game_pausing(
     let mut take_action: bool = false;
     if keyboard_input.just_pressed(KeyCode::Escape)
         || keyboard_input.just_pressed(KeyCode::Backspace)
-        || keyboard_input.just_pressed(KeyCode::Enter)
     {
         take_action = true;
         primary_device.value = ControlDevice::Keyboard;
@@ -340,8 +342,9 @@ fn button_react_to_mouse_system(
     mut commands: Commands,
     mut interaction_query: Query<
         (Entity, &Interaction, Option<&SelectedOption>),
-        (Changed<Interaction>, With<Button>),
+        With<Button>,
     >,
+    selected_options: Query<Entity, With<SelectedOption>>,
     primary_device: Res<PrimaryControlDevice>,
 ) {
     if primary_device.value != ControlDevice::Mouse
@@ -352,11 +355,132 @@ fn button_react_to_mouse_system(
     for (entity, interaction, selected) in &mut interaction_query {
         if *interaction == Interaction::None && selected.is_some()
         {
-            commands.entity(entity).remove::<SelectedOption>();
+            if selected_options.count() > 1
+            {
+                commands.entity(entity).remove::<SelectedOption>();
+            }
         }
         if *interaction == Interaction::Hovered && selected.is_none()
         {
             commands.entity(entity).insert(SelectedOption);
+        }
+    }
+}
+
+fn button_react_to_keyboard_or_gamepad_system(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    mut commands: Commands,
+    mut interaction_query: Query<
+        (Entity, &Interaction, Option<&SelectedOption>),
+        With<Button>,
+    >,
+    button_holder_query: Query<(Entity, &Children), With<ButtonsHolder>>,
+    mut primary_device: ResMut<PrimaryControlDevice>,
+)
+{
+    let mut movement_vector = Vec2::ZERO;
+    let mut confirm_command: bool = false;
+
+    if keyboard_input.just_pressed(KeyCode::KeyW)
+        || keyboard_input.just_pressed(KeyCode::ArrowUp)
+        || keyboard_input.just_pressed(KeyCode::KeyZ)
+    {
+        movement_vector.y += 1.0;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+    if keyboard_input.just_pressed(KeyCode::KeyS) || keyboard_input.just_pressed(KeyCode::ArrowDown) {
+        movement_vector.y -= 1.0;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+
+    if keyboard_input.just_pressed(KeyCode::Enter) || keyboard_input.just_pressed(KeyCode::Space)
+    {
+        confirm_command = true;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+
+
+    for (_entity, gamepad) in &gamepads {
+        let just_pressed = gamepad.get_just_pressed().into_iter();
+        for button in just_pressed {
+            if *button == GamepadButton::South || *button == GamepadButton::East {
+                confirm_command = true;
+                primary_device.value = ControlDevice::Gamepad;
+            }
+
+            if *button == GamepadButton::DPadUp {
+                movement_vector.y += 1.0;
+                primary_device.value = ControlDevice::Gamepad;
+            }
+            if *button == GamepadButton::DPadDown {
+                movement_vector.y -= 1.0;
+                primary_device.value = ControlDevice::Gamepad;
+            }
+        }
+    }
+
+    for (_, children) in button_holder_query
+    {
+        let mut buttons: Vec<Entity> = Vec::new();
+        let mut selected_index = 0;
+        for child in children
+        {
+            for(entity, _, sel) in &mut interaction_query
+            {
+                if child != &entity
+                {
+                    continue;
+                }
+                if sel.is_some()
+                {
+                    selected_index = buttons.len();     // doing this before adding the element to avoid the subtract one necessity
+                }
+
+                buttons.push(entity);
+            }
+        }
+
+        if buttons.len() == 0
+        {
+            continue;
+        }
+
+        if movement_vector.y > GAMEPAD_STICK_DEADZONE
+        {
+            commands.entity(buttons[selected_index]).remove::<SelectedOption>();
+
+            if selected_index == 0
+            {
+                commands.entity(*buttons.last().unwrap()).insert(SelectedOption);
+            }
+            else {
+                commands.entity(buttons[selected_index-1]).insert(SelectedOption);
+            }
+        }
+
+        if movement_vector.y < -GAMEPAD_STICK_DEADZONE
+        {
+            commands.entity(buttons[selected_index]).remove::<SelectedOption>();
+
+            if selected_index == buttons.len() - 1
+            {
+                commands.entity(buttons[0]).insert(SelectedOption);
+            }
+            else {
+                commands.entity(buttons[selected_index+1]).insert(SelectedOption);
+            }
+        }
+    }
+
+    if confirm_command {
+        for (entity, _, selected) in &mut interaction_query {
+            if selected.is_none()
+            {
+                continue;
+            }
+
+            commands.entity(entity).insert(Interaction::Pressed);
         }
     }
 }
@@ -484,6 +608,7 @@ fn main_menu_setup(
                 align_items: AlignItems::Center,
                 ..default()
             },
+            ButtonsHolder,
             children![
                 // game title
                 (
@@ -505,6 +630,7 @@ fn main_menu_setup(
                     button_node.clone(),
                     BackgroundColor(IDLE_BUTTON),
                     MenuButtonAction::Play,
+                    SelectedOption,
                     children![(
                         Text::new("Play"),
                         button_text_font.clone(),
@@ -568,6 +694,7 @@ fn pause_menu_setup(
                 align_items: AlignItems::Center,
                 ..default()
             },
+            ButtonsHolder,
             children![
                 // game title
                 (
@@ -589,6 +716,7 @@ fn pause_menu_setup(
                     button_node.clone(),
                     BackgroundColor(IDLE_BUTTON),
                     MenuButtonAction::Resume,
+                    SelectedOption,
                     children![(
                         Text::new("Resume"),
                         button_text_font.clone(),
