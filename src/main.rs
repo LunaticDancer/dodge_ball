@@ -21,6 +21,7 @@ enum AppState {
 enum ControlDevice {
     Keyboard,
     Gamepad,
+    Mouse,
 }
 
 #[derive(Resource)]
@@ -90,7 +91,6 @@ fn main() {
     });
     app.insert_resource(Score { value: 0.0 });
 
-    app.add_systems( PostUpdate, app_init.run_if(run_once));
     app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, reset_score));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
     app.add_systems(OnExit(AppState::Menu), (spawn_player, gameplay_ui_setup));
@@ -104,6 +104,7 @@ fn main() {
             handle_score.run_if(in_state(AppState::InGame)),
         ),
     );
+    app.add_systems( PostUpdate, app_init.run_if(run_once));
     app.add_systems(FixedUpdate, (move_player, clamp_player.after(move_player)));
 
     app.init_state::<AppState>();
