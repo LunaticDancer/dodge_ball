@@ -1,9 +1,10 @@
-use bevy::{prelude::*, window::WindowResized};
+use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
 
 const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
 const PLAYER_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5; // how much of the entire screen should the player travel per second
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
+const MOUSE_DEADZONE: f32 = 1.0;
 const TEXT_COLOR: Color = Color::hsv(0.0, 0.0, 0.5);
 const IDLE_BUTTON: Color = Color::hsv(0.0, 0.0, 1.0);
 const HOVERED_BUTTON: Color = Color::hsv(0.0, 0.0, 0.2);
@@ -18,9 +19,11 @@ enum AppState {
     Paused,
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash)]
 enum ControlDevice {
     Keyboard,
     Gamepad,
+    #[default]
     Mouse,
 }
 
@@ -94,18 +97,25 @@ fn main() {
     app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, reset_score));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
     app.add_systems(OnExit(AppState::Menu), (spawn_player, gameplay_ui_setup));
+    app.add_systems(PreUpdate, check_for_mouse_input);
     app.add_systems(
         Update,
         (
-            (button_system, menu_action)
+            (button_react_to_mouse_system, menu_action)
                 .run_if(in_state(AppState::Menu).or(in_state(AppState::Paused))),
             resize_screen_bounds,
             handle_game_pausing,
             handle_score.run_if(in_state(AppState::InGame)),
         ),
     );
-    app.add_systems( PostUpdate, app_init.run_if(run_once));
-    app.add_systems(FixedUpdate, (move_player, clamp_player.after(move_player)));
+    app.add_systems( PostUpdate, (
+        app_init.run_if(run_once),
+        button_handle_display,
+    ));
+    app.add_systems(FixedUpdate, (
+        move_player, 
+        clamp_player.after(move_player),
+    ));
 
     app.init_state::<AppState>();
     app.run();
@@ -310,19 +320,57 @@ fn handle_game_pausing(
     }
 }
 
+fn check_for_mouse_input(
+    mut motion: MessageReader<MouseMotion>,
+    mut primary_device: ResMut<PrimaryControlDevice>,
+    time: Res<Time<Virtual>>,
+)
+{
+    for ev in motion.read()
+    {
+        if ev.delta.x + ev.delta.y > MOUSE_DEADZONE * time.delta_secs()
+        {
+            primary_device.value = ControlDevice::Mouse;
+        }
+    }
+}
+
 // This system handles changing all buttons color based on mouse interaction
-fn button_system(
+fn button_react_to_mouse_system(
+    mut commands: Commands,
     mut interaction_query: Query<
-        (&Interaction, &mut BackgroundColor, Option<&SelectedOption>),
+        (Entity, &Interaction, Option<&SelectedOption>),
         (Changed<Interaction>, With<Button>),
     >,
+    primary_device: Res<PrimaryControlDevice>,
 ) {
-    for (interaction, mut background_color, selected) in &mut interaction_query {
+    if primary_device.value != ControlDevice::Mouse
+    {
+        return;
+    }
+
+    for (entity, interaction, selected) in &mut interaction_query {
+        if *interaction == Interaction::None && selected.is_some()
+        {
+            commands.entity(entity).remove::<SelectedOption>();
+        }
+        if *interaction == Interaction::Hovered && selected.is_none()
+        {
+            commands.entity(entity).insert(SelectedOption);
+        }
+    }
+}
+
+fn button_handle_display(
+    mut button_query: Query<(&Interaction, &mut BackgroundColor, Option<&SelectedOption>), With<Button>>,
+)
+{
+    for(interaction, mut background_color, selected) in &mut button_query
+    {
         *background_color = match (*interaction, selected) {
-            (Interaction::Pressed, _) | (Interaction::None, Some(_)) => PRESSED_BUTTON.into(),
-            (Interaction::Hovered, Some(_)) => PRESSED_BUTTON.into(),
-            (Interaction::Hovered, None) => HOVERED_BUTTON.into(),
-            (Interaction::None, None) => IDLE_BUTTON.into(),
+            (Interaction::Pressed, Some(_)) => PRESSED_BUTTON.into(),
+            (_, Some(_)) => HOVERED_BUTTON.into(),
+            (_, _) => IDLE_BUTTON.into(),
         }
     }
 }
