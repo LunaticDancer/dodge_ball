@@ -4,6 +4,8 @@ const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
 const PLAYER_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5; // how much of the entire screen should the player travel per second
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
+const GAMEPAD_AIM_DEADZONE: f32 = 0.5;
+const GAMEPAD_AIM_DISTANCE: f32 = 0.1;
 const MOUSE_DEADZONE: f32 = 1.0;
 const TEXT_COLOR: Color = Color::hsv(0.0, 0.0, 0.5);
 const IDLE_BUTTON: Color = Color::hsv(0.0, 0.0, 1.0);
@@ -61,6 +63,9 @@ struct SelectedOption;
 struct Player;
 
 #[derive(Component)]
+struct PlayerAim;
+
+#[derive(Component)]
 struct ButtonsHolder;
 
 #[derive(Component)]
@@ -97,9 +102,11 @@ fn main() {
     });
     app.insert_resource(Score { value: 0.0 });
 
-    app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, reset_score));
+    app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, despawn_player_aim, reset_score));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
-    app.add_systems(OnExit(AppState::Menu), (spawn_player, gameplay_ui_setup));
+    app.add_systems(OnExit(AppState::Menu), (spawn_player, spawn_player_aim, gameplay_ui_setup));
+    app.add_systems(OnEnter(AppState::InGame), make_mouse_invisible);
+    app.add_systems(OnExit(AppState::InGame), make_mouse_visible);
     app.add_systems(PreUpdate, check_for_mouse_input);
     app.add_systems(
         Update,
@@ -118,6 +125,8 @@ fn main() {
     app.add_systems(FixedUpdate, (
         move_player, 
         clamp_player.after(move_player),
+        move_player_aim,
+        clamp_player_aim.after(move_player_aim),
     ));
 
     app.init_state::<AppState>();
@@ -194,6 +203,78 @@ fn convert_time_to_text(time: f32) -> String{
     time_text.push_str(&(ms%100).to_string());
 
     time_text
+}
+
+fn make_mouse_visible(mut cursor_options: Single<&mut bevy::window::CursorOptions>)
+{
+    cursor_options.visible = true;
+}
+fn make_mouse_invisible(mut cursor_options: Single<&mut bevy::window::CursorOptions>)
+{
+    cursor_options.visible = false;
+}
+
+fn spawn_player_aim(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    display_properties: Res<DisplayProperties>,
+) {
+    let mesh = meshes.add(Circle::new(
+        display_properties.shorter_dimension * PLAYER_SIZE * 0.5,
+    ));
+    let material = materials.add(Color::srgb(1., 1., 1.));
+    commands.spawn((
+        PlayerAim,
+        Mesh2d(mesh),
+        MeshMaterial2d(material),
+        Transform::from_translation(Vec3::new(PLAYER_SIZE, PLAYER_SIZE, 1.)),
+    ));
+}
+
+fn move_player_aim(
+    mut motion: MessageReader<MouseMotion>,
+    mut player_aim: Single<&mut Transform, With<PlayerAim>>,
+    player: Single<&Transform, (With<Player>, Without<PlayerAim>)>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    fixed_time: Res<Time<Fixed>>,
+    display_properties: Res<DisplayProperties>,
+) {
+    let mut movement_vector = Vec2::ZERO;
+    
+    for mot in motion.read()
+    {
+        movement_vector += Vec2{x: mot.delta.x, y: -mot.delta.y};
+    }
+
+    player_aim.translation += vec3(movement_vector.x, movement_vector.y, 0.);
+
+    for (_entity, gamepad) in &gamepads {
+        movement_vector = Vec2 { x: gamepad.get(GamepadAxis::RightStickX).unwrap(), y: gamepad.get(GamepadAxis::RightStickY).unwrap() };
+
+        if movement_vector.length() < GAMEPAD_AIM_DEADZONE
+        {
+            continue;
+        }
+
+        let lerp_delta = 10.0 * fixed_time.delta_secs();
+        player_aim.translation = player_aim.translation.lerp((player.translation + vec3(movement_vector.x, movement_vector.y, 0.) * GAMEPAD_AIM_DISTANCE
+            * display_properties.shorter_dimension), if lerp_delta > 1.0 {1.0} else {lerp_delta});
+    }
+}
+
+fn clamp_player_aim(mut player: Single<&mut Transform, With<PlayerAim>>, display: Res<DisplayProperties>) {
+    player.translation = Vec3 {
+        x: player.translation.x.clamp(-display.half_w, display.half_w),
+        y: player.translation.y.clamp(-display.half_h, display.half_h),
+        z: 0.,
+    }
+}
+
+fn despawn_player_aim(mut commands: Commands, players: Query<(Entity, &PlayerAim)>) {
+    for (entity_id, _) in players.iter() {
+        commands.entity(entity_id).despawn();
+    }
 }
 
 fn despawn_player(mut commands: Commands, players: Query<(Entity, &Player)>) {
