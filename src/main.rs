@@ -293,14 +293,42 @@ fn spawn_bullet(
 }
 
 fn move_bouncers(
-    bullets: Query<(&mut Transform, &ScreenEdgeBouncer)>,
+    bullets: Query<(&mut Transform, &mut ScreenEdgeBouncer)>,
     fixed_time: Res<Time<Fixed>>,
     display_properties: Res<DisplayProperties>,
 )
 {
-    for (mut trans, bouncer) in bullets
+    for (mut trans, mut bouncer) in bullets
     {
         trans.translation += bouncer.velocity * BULLET_MOVEMENT_SPEED_NORMALIZED * display_properties.shorter_dimension * fixed_time.delta_secs();
+
+        if bouncer.velocity.x > 0.0
+        {
+            if trans.translation.x > display_properties.half_w
+            {
+                bouncer.velocity.x = - bouncer.velocity.x;
+            }            
+        }
+        else {
+            if trans.translation.x < -display_properties.half_w
+            {
+                bouncer.velocity.x = - bouncer.velocity.x;
+            }  
+        }
+
+        if bouncer.velocity.y > 0.0
+        {
+            if trans.translation.y > display_properties.half_h
+            {
+                bouncer.velocity.y = - bouncer.velocity.y;
+            }            
+        }
+        else {
+            if trans.translation.y < -display_properties.half_h
+            {
+                bouncer.velocity.y = - bouncer.velocity.y;
+            }  
+        }
     }
 }
 
