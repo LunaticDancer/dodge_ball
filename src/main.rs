@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
 
 const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
@@ -35,6 +37,12 @@ struct Score {
 }
 
 #[derive(Resource)]
+struct BulletRenderComponents {
+    mesh: Handle<Mesh>,
+    material: Handle<ColorMaterial>,
+}
+
+#[derive(Resource)]
 struct PrimaryControlDevice {
     value: ControlDevice,
 }
@@ -60,10 +68,22 @@ enum MenuButtonAction {
 struct SelectedOption;
 
 #[derive(Component)]
-struct Player;
+struct Player
+{
+    bullet_timer: Timer,
+}
 
 #[derive(Component)]
 struct PlayerAim;
+
+#[derive(Component)]
+struct Bullet;
+
+#[derive(Component)]
+struct ScreenEdgeBouncer
+{
+    velocity: Vec3,
+}
 
 #[derive(Component)]
 struct ButtonsHolder;
@@ -104,7 +124,12 @@ fn main() {
 
     app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, despawn_player_aim, reset_score));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
-    app.add_systems(OnExit(AppState::Menu), (spawn_player, spawn_player_aim, gameplay_ui_setup));
+    app.add_systems(OnExit(AppState::Menu), (
+        spawn_player, 
+        spawn_player_aim, 
+        gameplay_ui_setup, 
+        init_bullet_data,
+    ));
     app.add_systems(OnEnter(AppState::InGame), make_mouse_invisible);
     app.add_systems(OnExit(AppState::InGame), make_mouse_visible);
     app.add_systems(PreUpdate, check_for_mouse_input);
@@ -114,7 +139,9 @@ fn main() {
             (button_react_to_mouse_system, button_react_to_keyboard_or_gamepad_system, menu_action)
                 .run_if(in_state(AppState::Menu).or(in_state(AppState::Paused))),
             resize_screen_bounds,
+            init_bullet_data.after(resize_screen_bounds).run_if(run_once),
             handle_game_pausing,
+            spawn_bullet.after(init_bullet_data),
             handle_score.run_if(in_state(AppState::InGame)),
         ),
     );
@@ -139,6 +166,21 @@ fn app_init(
 ) {
     commands.spawn((Camera2d::default(), Msaa::Off));
     game_state.set(AppState::Menu);
+}
+
+fn init_bullet_data(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    display_properties: Res<DisplayProperties>,
+)
+{
+    commands.insert_resource(BulletRenderComponents{
+        mesh: meshes.add(Circle::new(
+            display_properties.shorter_dimension * PLAYER_SIZE,
+        )),
+        material: materials.add(Color::hsv(1., 1., 1.)),
+    });
 }
 
 fn resize_screen_bounds(
@@ -214,6 +256,35 @@ fn make_mouse_invisible(mut cursor_options: Single<&mut bevy::window::CursorOpti
     cursor_options.visible = false;
 }
 
+fn spawn_bullet(
+    mut commands: Commands,
+    bullet_data: Res<BulletRenderComponents>,
+    mut timer: Single<&mut Player, With<Player>>,
+    player: Single<&Transform, With<Player>>,
+    aim: Single<&Transform, With<PlayerAim>>,
+    time: Res<Time<Virtual>>,
+    display_properties: Res<DisplayProperties>,
+)
+{
+    timer.bullet_timer.tick(time.delta());
+
+    if !timer.bullet_timer.just_finished()
+    {
+        return;
+    }
+
+    let initial_velocity = (aim.translation - player.translation).normalize();
+    let initial_position = player.translation + (initial_velocity * PLAYER_SIZE * 3.0 * display_properties.shorter_dimension);
+    
+    commands.spawn((
+        Bullet,
+        Mesh2d(bullet_data.mesh.clone()),
+        MeshMaterial2d(bullet_data.material.clone()),
+        Transform::from_translation(initial_position),
+        ScreenEdgeBouncer{velocity: initial_velocity},
+    ));
+}
+
 fn spawn_player_aim(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -258,8 +329,8 @@ fn move_player_aim(
         }
 
         let lerp_delta = 10.0 * fixed_time.delta_secs();
-        player_aim.translation = player_aim.translation.lerp((player.translation + vec3(movement_vector.x, movement_vector.y, 0.) * GAMEPAD_AIM_DISTANCE
-            * display_properties.shorter_dimension), if lerp_delta > 1.0 {1.0} else {lerp_delta});
+        player_aim.translation = player_aim.translation.lerp(player.translation + vec3(movement_vector.x, movement_vector.y, 0.) * GAMEPAD_AIM_DISTANCE
+            * display_properties.shorter_dimension, if lerp_delta > 1.0 {1.0} else {lerp_delta});
     }
 }
 
@@ -292,9 +363,10 @@ fn spawn_player(
     let mesh = meshes.add(Circle::new(
         display_properties.shorter_dimension * PLAYER_SIZE,
     ));
+
     let material = materials.add(Color::srgb(1., 1., 1.));
     commands.spawn((
-        Player,
+        Player{bullet_timer: Timer::new(Duration::from_secs(2), TimerMode::Repeating)},
         Mesh2d(mesh),
         MeshMaterial2d(material),
         Transform::from_translation(Vec3::new(0., 0., 0.)),
