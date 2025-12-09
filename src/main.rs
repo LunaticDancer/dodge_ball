@@ -1,9 +1,9 @@
 use std::time::Duration;
-
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
 
 const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
 const PLAYER_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5; // how much of the entire screen should the player travel per second
+const BULLET_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5;
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
 const GAMEPAD_AIM_DEADZONE: f32 = 0.5;
@@ -122,7 +122,14 @@ fn main() {
     });
     app.insert_resource(Score { value: 0.0 });
 
-    app.add_systems(OnEnter(AppState::Menu), (main_menu_setup, despawn_player, despawn_player_aim, reset_score));
+    app.add_systems(Startup, init_bullet_data);
+    app.add_systems(OnEnter(AppState::Menu), (
+        main_menu_setup, 
+        despawn_player, 
+        despawn_player_aim, 
+        despawn_bullets,
+        reset_score,
+    ));
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
     app.add_systems(OnExit(AppState::Menu), (
         spawn_player, 
@@ -139,9 +146,8 @@ fn main() {
             (button_react_to_mouse_system, button_react_to_keyboard_or_gamepad_system, menu_action)
                 .run_if(in_state(AppState::Menu).or(in_state(AppState::Paused))),
             resize_screen_bounds,
-            init_bullet_data.after(resize_screen_bounds).run_if(run_once),
             handle_game_pausing,
-            spawn_bullet.after(init_bullet_data),
+            spawn_bullet.after(init_bullet_data).run_if(in_state(AppState::InGame)),
             handle_score.run_if(in_state(AppState::InGame)),
         ),
     );
@@ -154,6 +160,7 @@ fn main() {
         clamp_player.after(move_player),
         move_player_aim,
         clamp_player_aim.after(move_player_aim),
+        move_bouncers,
     ));
 
     app.init_state::<AppState>();
@@ -283,6 +290,24 @@ fn spawn_bullet(
         Transform::from_translation(initial_position),
         ScreenEdgeBouncer{velocity: initial_velocity},
     ));
+}
+
+fn move_bouncers(
+    bullets: Query<(&mut Transform, &ScreenEdgeBouncer)>,
+    fixed_time: Res<Time<Fixed>>,
+    display_properties: Res<DisplayProperties>,
+)
+{
+    for (mut trans, bouncer) in bullets
+    {
+        trans.translation += bouncer.velocity * BULLET_MOVEMENT_SPEED_NORMALIZED * display_properties.shorter_dimension * fixed_time.delta_secs();
+    }
+}
+
+fn despawn_bullets(mut commands: Commands, bullets: Query<(Entity, &Bullet)>) {
+    for (entity_id, _) in bullets.iter() {
+        commands.entity(entity_id).despawn();
+    }
 }
 
 fn spawn_player_aim(
