@@ -1,13 +1,17 @@
-use std::time::Duration;
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
+use rand::{SeedableRng};
+use rand_chacha::ChaCha8Rng;
+use std::{f32::consts::PI, time::Duration};
 
 const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
-const PI: f32 = 3.14159265;
 const PLAYER_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5; // how much of the entire screen should the player travel per second
 const BULLET_MOVEMENT_SPEED_NORMALIZED: f32 = 0.4;
 const BULLET_COLOR_OSCILATION_SPEED: f32 = 108.;
 const BULLET_PARTICLE_INTERVAL: f32 = 0.1;
 const TRAIL_PARTICLE_LIFETIME: f32 = 0.7;
+const COLLISION_PARTICLE_LIFETIME: f32 = 0.5;
+const COLLISION_PARTICLE_COUNT: i32 = 32;
+const COLLISION_PARTICLE_SPEED_NORMALIZED: f32 = 0.3;
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
 const GAMEPAD_AIM_DEADZONE: f32 = 0.5;
@@ -35,6 +39,9 @@ enum ControlDevice {
     #[default]
     Mouse,
 }
+
+#[derive(Resource)]
+struct RandomSource(ChaCha8Rng);
 
 #[derive(Resource)]
 struct Score {
@@ -73,13 +80,11 @@ enum MenuButtonAction {
 struct SelectedOption;
 
 #[derive(Component)]
-struct Player
-{
+struct Player {
     bullet_timer: Timer,
 }
 #[derive(Component)]
-struct TrailParticleSpawner
-{
+struct TrailParticleSpawner {
     timer: Timer,
 }
 
@@ -90,14 +95,18 @@ struct PlayerAim;
 struct Bullet;
 
 #[derive(Component)]
-struct TrailParticle
-{
+struct TrailParticle {
     lifetime: f32,
 }
 
 #[derive(Component)]
-struct ScreenEdgeBouncer
-{
+struct BounceParticle {
+    lifetime: f32,
+    velocity: Vec3,
+}
+
+#[derive(Component)]
+struct ScreenEdgeBouncer {
     velocity: Vec3,
 }
 
@@ -137,34 +146,50 @@ fn main() {
         value: ControlDevice::Keyboard,
     });
     app.insert_resource(Score { value: 0.0 });
+    let seeded_rng = ChaCha8Rng::seed_from_u64(2137);
+    app.insert_resource(RandomSource(seeded_rng));
+
+
 
     app.add_systems(Startup, init_bullet_data);
-    app.add_systems(OnEnter(AppState::Menu), (
-        main_menu_setup, 
-        despawn_player, 
-        despawn_player_aim, 
-        despawn_bullets,
-        reset_score,
-    ));
+    app.add_systems(
+        OnEnter(AppState::Menu),
+        (
+            main_menu_setup,
+            despawn_player,
+            despawn_player_aim,
+            despawn_bullets,
+            reset_score,
+        ),
+    );
     app.add_systems(OnEnter(AppState::GameOver), game_over_screen_setup);
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
-    app.add_systems(OnExit(AppState::Menu), (
-        spawn_player, 
-        spawn_player_aim, 
-        gameplay_ui_setup, 
-        init_bullet_data,
-    ));
+    app.add_systems(
+        OnExit(AppState::Menu),
+        (
+            spawn_player,
+            spawn_player_aim,
+            gameplay_ui_setup,
+            init_bullet_data,
+        ),
+    );
     app.add_systems(OnEnter(AppState::InGame), make_mouse_invisible);
     app.add_systems(OnExit(AppState::InGame), make_mouse_visible);
     app.add_systems(PreUpdate, check_for_mouse_input);
     app.add_systems(
         Update,
         (
-            (button_react_to_mouse_system, button_react_to_keyboard_or_gamepad_system, menu_action)
+            (
+                button_react_to_mouse_system,
+                button_react_to_keyboard_or_gamepad_system,
+                menu_action,
+            )
                 .run_if(in_state(AppState::Menu).or(in_state(AppState::Paused))),
             resize_screen_bounds,
             handle_game_pausing,
-            spawn_bullet.after(init_bullet_data).run_if(in_state(AppState::InGame)),
+            spawn_bullet
+                .after(init_bullet_data)
+                .run_if(in_state(AppState::InGame)),
             handle_score.run_if(in_state(AppState::InGame)),
             oscilate_bullet_colors,
             handle_game_over_continue.run_if(in_state(AppState::GameOver)),
@@ -172,27 +197,28 @@ fn main() {
             handle_trail_particles,
         ),
     );
-    app.add_systems( PostUpdate, (
-        app_init.run_if(run_once),
-        button_handle_display,
-    ));
-    app.add_systems(FixedUpdate, (
-        move_player, 
-        clamp_player.after(move_player),
-        move_player_aim,
-        clamp_player_aim.after(move_player_aim),
-        move_bouncers,
-        handle_bullet_collision,
-    ));
+    app.add_systems(
+        PostUpdate,
+        (app_init.run_if(run_once), button_handle_display),
+    );
+    app.add_systems(
+        FixedUpdate,
+        (
+            move_player,
+            clamp_player.after(move_player),
+            move_player_aim,
+            clamp_player_aim.after(move_player_aim),
+            move_bouncers,
+            handle_bullet_collision,
+            handle_bounce_particles,
+        ),
+    );
 
     app.init_state::<AppState>();
     app.run();
 }
 
-fn app_init(
-    mut commands: Commands,
-    mut game_state: ResMut<NextState<AppState>>,
-) {
+fn app_init(mut commands: Commands, mut game_state: ResMut<NextState<AppState>>) {
     commands.spawn((Camera2d::default(), Msaa::Off));
     game_state.set(AppState::Menu);
 }
@@ -202,9 +228,8 @@ fn init_bullet_data(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     display_properties: Res<DisplayProperties>,
-)
-{
-    commands.insert_resource(BulletRenderComponents{
+) {
+    commands.insert_resource(BulletRenderComponents {
         mesh: meshes.add(Circle::new(
             display_properties.shorter_dimension * PLAYER_SIZE,
         )),
@@ -233,55 +258,52 @@ fn resize_screen_bounds(
     }
 }
 
-fn reset_score(mut score: ResMut<Score>)
-{
+fn reset_score(mut score: ResMut<Score>) {
     score.value = 0.;
 }
 
-fn handle_score(time: Res<Time<Virtual>>, mut score: ResMut<Score>, display: Query<&mut Text, With<ScoreDisplay>>) {
+fn handle_score(
+    time: Res<Time<Virtual>>,
+    mut score: ResMut<Score>,
+    display: Query<&mut Text, With<ScoreDisplay>>,
+) {
     score.value += time.delta_secs();
     let time_text: String = convert_time_to_text(score.value);
 
-    for mut text in display.into_iter()
-    {
+    for mut text in display.into_iter() {
         text.0 = time_text.clone();
     }
 }
 
-fn convert_time_to_text(time: f32) -> String{
+fn convert_time_to_text(time: f32) -> String {
     let mut time_text: String = "".to_string();
 
     let ms = (time * 100.) as u32;
-    let s = (ms - (ms % 100))/100;
-    let m = (s - (s % 60))/60;
+    let s = (ms - (ms % 100)) / 100;
+    let m = (s - (s % 60)) / 60;
 
-    if m<10
-    {
+    if m < 10 {
         time_text += "0";
     }
     time_text.push_str(&m.to_string());
     time_text += ":";
-    if (s%60)<10
-    {
+    if (s % 60) < 10 {
         time_text += "0";
     }
-    time_text.push_str(&(s%60).to_string());
+    time_text.push_str(&(s % 60).to_string());
     time_text += ":";
-    if (ms%100)<10
-    {
+    if (ms % 100) < 10 {
         time_text += "0";
     }
-    time_text.push_str(&(ms%100).to_string());
+    time_text.push_str(&(ms % 100).to_string());
 
     time_text
 }
 
-fn make_mouse_visible(mut cursor_options: Single<&mut bevy::window::CursorOptions>)
-{
+fn make_mouse_visible(mut cursor_options: Single<&mut bevy::window::CursorOptions>) {
     cursor_options.visible = true;
 }
-fn make_mouse_invisible(mut cursor_options: Single<&mut bevy::window::CursorOptions>)
-{
+fn make_mouse_invisible(mut cursor_options: Single<&mut bevy::window::CursorOptions>) {
     cursor_options.visible = false;
 }
 
@@ -289,13 +311,10 @@ fn handle_trail_particles(
     mut commands: Commands,
     particles: Query<(Entity, &mut Transform, &mut TrailParticle)>,
     time: Res<Time<Virtual>>,
-)
-{
-    for (entity, mut transform, mut particle) in particles
-    {
+) {
+    for (entity, mut transform, mut particle) in particles {
         particle.lifetime -= time.delta_secs();
-        if particle.lifetime < 0.0
-        {
+        if particle.lifetime < 0.0 {
             commands.entity(entity).despawn();
             continue;
         }
@@ -309,21 +328,20 @@ fn spawn_bullet_trail(
     bullet_data: Res<BulletRenderComponents>,
     bullets: Query<(&Transform, &mut TrailParticleSpawner)>,
     time: Res<Time<Virtual>>,
-)
-{
-    for (transform, mut spawner) in bullets
-    {
+) {
+    for (transform, mut spawner) in bullets {
         spawner.timer.tick(time.delta());
 
-        if !spawner.timer.just_finished()
-        {
+        if !spawner.timer.just_finished() {
             continue;
         }
 
         let initial_position = transform.translation;
-        
+
         commands.spawn((
-            TrailParticle{lifetime: TRAIL_PARTICLE_LIFETIME},
+            TrailParticle {
+                lifetime: TRAIL_PARTICLE_LIFETIME,
+            },
             Mesh2d(bullet_data.mesh.clone()),
             MeshMaterial2d(bullet_data.material.clone()),
             Transform::from_translation(initial_position),
@@ -339,69 +357,100 @@ fn spawn_bullet(
     aim: Single<&Transform, With<PlayerAim>>,
     time: Res<Time<Virtual>>,
     display_properties: Res<DisplayProperties>,
-)
-{
+) {
     timer.bullet_timer.tick(time.delta());
 
-    if !timer.bullet_timer.just_finished()
-    {
+    if !timer.bullet_timer.just_finished() {
         return;
     }
 
     let initial_velocity = (aim.translation - player.translation).normalize();
-    let initial_position = player.translation + (initial_velocity * PLAYER_SIZE * 3.0 * display_properties.shorter_dimension);
-    
+    let initial_position = player.translation
+        + (initial_velocity * PLAYER_SIZE * 3.0 * display_properties.shorter_dimension);
+
     commands.spawn((
         Bullet,
-        TrailParticleSpawner{timer: Timer::new(Duration::from_secs_f32(BULLET_PARTICLE_INTERVAL), TimerMode::Repeating)},
+        TrailParticleSpawner {
+            timer: Timer::new(
+                Duration::from_secs_f32(BULLET_PARTICLE_INTERVAL),
+                TimerMode::Repeating,
+            ),
+        },
         Mesh2d(bullet_data.mesh.clone()),
         MeshMaterial2d(bullet_data.material.clone()),
         Transform::from_translation(initial_position),
-        ScreenEdgeBouncer{velocity: initial_velocity},
+        ScreenEdgeBouncer {
+            velocity: initial_velocity,
+        },
     ));
 }
 
+fn handle_bounce_particles(
+    mut commands: Commands,
+    particles: Query<(Entity, &mut Transform, &mut BounceParticle)>,
+    time: Res<Time<Fixed>>,
+    display_properties: Res<DisplayProperties>,
+) {
+    for (entity, mut transform, mut particle) in particles {
+        particle.lifetime -= time.delta_secs();
+        if particle.lifetime < 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        transform.scale = Vec3::ONE * ((PI/2.0).lerp(0.0, particle.lifetime / TRAIL_PARTICLE_LIFETIME)).cos() * 0.5;
+        transform.translation += particle.velocity * ((PI/2.0).lerp(0.0, particle.lifetime / TRAIL_PARTICLE_LIFETIME)).cos() 
+            * COLLISION_PARTICLE_SPEED_NORMALIZED * display_properties.shorter_dimension * time.delta_secs();
+    }
+}
+
 fn handle_bullet_collision(
+    mut commands: Commands,
     mut bullets: Query<(&Transform, &mut ScreenEdgeBouncer), With<Bullet>>,
     player: Single<&Transform, With<Player>>,
     mut game_state: ResMut<NextState<AppState>>,
     display_properties: Res<DisplayProperties>,
     mut time: ResMut<Time<Virtual>>,
-)
-{
+    bullet_data: Res<BulletRenderComponents>,
+    mut randomness: ResMut<RandomSource>,
+) {
     let collision_distance = PLAYER_SIZE * 2.0 * display_properties.shorter_dimension;
+    let circle = Circle::new(1.0);
 
     let mut iter = bullets.iter_combinations_mut();
-    while let Some(
-        [
-            (bullet, mut bouncer),
-            (second, mut bouncerer),
-        ]
-    ) = iter.fetch_next()
-    {
-        if bullet.translation.distance(player.translation) < collision_distance
-        {
+    while let Some([(bullet, mut bouncer), (second, mut bouncerer)]) = iter.fetch_next() {
+        if bullet.translation.distance(player.translation) < collision_distance {
             time.pause();
             game_state.set(AppState::GameOver);
         }
-        if second.translation.distance(player.translation) < collision_distance
-        {
+        if second.translation.distance(player.translation) < collision_distance {
             time.pause();
             game_state.set(AppState::GameOver);
         }
 
-        if bullet.translation.distance(second.translation) > collision_distance
-            {
-                continue;
-            }
-            if bullet.translation.distance(second.translation) < 1.0
-            {
-                continue;
-            }
+        if bullet.translation.distance(second.translation) > collision_distance {
+            continue;
+        }
+        if bullet.translation.distance(second.translation) < 1.0 {
+            continue;
+        }
 
-            let dir = (bullet.translation - second.translation).normalize();
-            bouncer.velocity = dir;
-            bouncerer.velocity = -dir;
+        let average_position = (bullet.translation + second.translation) / 2.0;
+        let dir = (bullet.translation - second.translation).normalize();
+        bouncer.velocity = dir;
+        bouncerer.velocity = -dir;
+
+        for _ in 0..COLLISION_PARTICLE_COUNT
+        {
+            let rng = &mut randomness.0;
+            let vel = circle.sample_boundary(rng);
+            commands.spawn((
+                BounceParticle{lifetime: COLLISION_PARTICLE_LIFETIME, velocity: Vec3::new(vel.x, vel.y, 0.0)},
+                Transform::from_translation(average_position),
+                Mesh2d(bullet_data.mesh.clone()),
+                MeshMaterial2d(bullet_data.material.clone()),
+            ));
+        }
     }
 }
 
@@ -409,50 +458,46 @@ fn oscilate_bullet_colors(
     time: Res<Time<Real>>,
     bullet_data: Res<BulletRenderComponents>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-)
-{
+) {
     let mat: &mut ColorMaterial = materials.get_mut(bullet_data.material.id()).unwrap();
-    mat.color = Color::hsv(time.elapsed_secs() * BULLET_COLOR_OSCILATION_SPEED, 1., 0.75);
+    mat.color = Color::hsv(
+        time.elapsed_secs() * BULLET_COLOR_OSCILATION_SPEED,
+        1.,
+        0.75,
+    );
 }
 
 fn move_bouncers(
     bullets: Query<(&mut Transform, &mut ScreenEdgeBouncer)>,
     fixed_time: Res<Time<Fixed>>,
     display_properties: Res<DisplayProperties>,
-)
-{
+) {
     let w_margin = display_properties.half_w - PLAYER_SIZE * display_properties.shorter_dimension;
     let h_margin = display_properties.half_h - PLAYER_SIZE * display_properties.shorter_dimension;
-    for (mut trans, mut bouncer) in bullets
-    {
-        trans.translation += bouncer.velocity * BULLET_MOVEMENT_SPEED_NORMALIZED * display_properties.shorter_dimension * fixed_time.delta_secs();
+    for (mut trans, mut bouncer) in bullets {
+        trans.translation += bouncer.velocity
+            * BULLET_MOVEMENT_SPEED_NORMALIZED
+            * display_properties.shorter_dimension
+            * fixed_time.delta_secs();
 
-        if bouncer.velocity.x > 0.0
-        {
-            if trans.translation.x > w_margin
-            {
-                bouncer.velocity.x = - bouncer.velocity.x;
-            }            
-        }
-        else {
-            if trans.translation.x < -w_margin
-            {
-                bouncer.velocity.x = - bouncer.velocity.x;
-            }  
+        if bouncer.velocity.x > 0.0 {
+            if trans.translation.x > w_margin {
+                bouncer.velocity.x = -bouncer.velocity.x;
+            }
+        } else {
+            if trans.translation.x < -w_margin {
+                bouncer.velocity.x = -bouncer.velocity.x;
+            }
         }
 
-        if bouncer.velocity.y > 0.0
-        {
-            if trans.translation.y > h_margin
-            {
-                bouncer.velocity.y = - bouncer.velocity.y;
-            }            
-        }
-        else {
-            if trans.translation.y < -h_margin
-            {
-                bouncer.velocity.y = - bouncer.velocity.y;
-            }  
+        if bouncer.velocity.y > 0.0 {
+            if trans.translation.y > h_margin {
+                bouncer.velocity.y = -bouncer.velocity.y;
+            }
+        } else {
+            if trans.translation.y < -h_margin {
+                bouncer.velocity.y = -bouncer.velocity.y;
+            }
         }
     }
 }
@@ -490,29 +535,41 @@ fn move_player_aim(
     display_properties: Res<DisplayProperties>,
 ) {
     let mut movement_vector = Vec2::ZERO;
-    
-    for mot in motion.read()
-    {
-        movement_vector += Vec2{x: mot.delta.x, y: -mot.delta.y};
+
+    for mot in motion.read() {
+        movement_vector += Vec2 {
+            x: mot.delta.x,
+            y: -mot.delta.y,
+        };
     }
 
     player_aim.translation += vec3(movement_vector.x, movement_vector.y, 0.);
 
     for (_entity, gamepad) in &gamepads {
-        movement_vector = Vec2 { x: gamepad.get(GamepadAxis::RightStickX).unwrap(), y: gamepad.get(GamepadAxis::RightStickY).unwrap() };
+        movement_vector = Vec2 {
+            x: gamepad.get(GamepadAxis::RightStickX).unwrap(),
+            y: gamepad.get(GamepadAxis::RightStickY).unwrap(),
+        };
 
-        if movement_vector.length() < GAMEPAD_AIM_DEADZONE
-        {
+        if movement_vector.length() < GAMEPAD_AIM_DEADZONE {
             continue;
         }
 
         let lerp_delta = 10.0 * fixed_time.delta_secs();
-        player_aim.translation = player_aim.translation.lerp(player.translation + vec3(movement_vector.x, movement_vector.y, 0.) * GAMEPAD_AIM_DISTANCE
-            * display_properties.shorter_dimension, if lerp_delta > 1.0 {1.0} else {lerp_delta});
+        player_aim.translation = player_aim.translation.lerp(
+            player.translation
+                + vec3(movement_vector.x, movement_vector.y, 0.)
+                    * GAMEPAD_AIM_DISTANCE
+                    * display_properties.shorter_dimension,
+            if lerp_delta > 1.0 { 1.0 } else { lerp_delta },
+        );
     }
 }
 
-fn clamp_player_aim(mut player: Single<&mut Transform, With<PlayerAim>>, display: Res<DisplayProperties>) {
+fn clamp_player_aim(
+    mut player: Single<&mut Transform, With<PlayerAim>>,
+    display: Res<DisplayProperties>,
+) {
     player.translation = Vec3 {
         x: player.translation.x.clamp(-display.half_w, display.half_w),
         y: player.translation.y.clamp(-display.half_h, display.half_h),
@@ -544,7 +601,9 @@ fn spawn_player(
 
     let material = materials.add(Color::srgb(1., 1., 1.));
     commands.spawn((
-        Player{bullet_timer: Timer::new(Duration::from_secs(2), TimerMode::Repeating)},
+        Player {
+            bullet_timer: Timer::new(Duration::from_secs(2), TimerMode::Repeating),
+        },
         Mesh2d(mesh),
         MeshMaterial2d(material),
         Transform::from_translation(Vec3::new(0., 0., 0.)),
@@ -683,7 +742,11 @@ fn handle_game_over_continue(
 
         let just_pressed = gamepad.get_just_pressed().into_iter();
         for button in just_pressed {
-            if *button == GamepadButton::Select || *button == GamepadButton::Start || *button == GamepadButton::South || *button == GamepadButton::East {
+            if *button == GamepadButton::Select
+                || *button == GamepadButton::Start
+                || *button == GamepadButton::South
+                || *button == GamepadButton::East
+            {
                 take_action = true;
                 primary_device.value = ControlDevice::Gamepad;
                 break;
@@ -701,12 +764,9 @@ fn check_for_mouse_input(
     mut motion: MessageReader<MouseMotion>,
     mut primary_device: ResMut<PrimaryControlDevice>,
     time: Res<Time<Virtual>>,
-)
-{
-    for ev in motion.read()
-    {
-        if ev.delta.x + ev.delta.y > MOUSE_DEADZONE * time.delta_secs()
-        {
+) {
+    for ev in motion.read() {
+        if ev.delta.x + ev.delta.y > MOUSE_DEADZONE * time.delta_secs() {
             primary_device.value = ControlDevice::Mouse;
         }
     }
@@ -715,28 +775,21 @@ fn check_for_mouse_input(
 // This system handles changing all buttons color based on mouse interaction
 fn button_react_to_mouse_system(
     mut commands: Commands,
-    mut interaction_query: Query<
-        (Entity, &Interaction, Option<&SelectedOption>),
-        With<Button>,
-    >,
+    mut interaction_query: Query<(Entity, &Interaction, Option<&SelectedOption>), With<Button>>,
     selected_options: Query<Entity, With<SelectedOption>>,
     primary_device: Res<PrimaryControlDevice>,
 ) {
-    if primary_device.value != ControlDevice::Mouse
-    {
+    if primary_device.value != ControlDevice::Mouse {
         return;
     }
 
     for (entity, interaction, selected) in &mut interaction_query {
-        if *interaction == Interaction::None && selected.is_some()
-        {
-            if selected_options.count() > 1
-            {
+        if *interaction == Interaction::None && selected.is_some() {
+            if selected_options.count() > 1 {
                 commands.entity(entity).remove::<SelectedOption>();
             }
         }
-        if *interaction == Interaction::Hovered && selected.is_none()
-        {
+        if *interaction == Interaction::Hovered && selected.is_none() {
             commands.entity(entity).insert(SelectedOption);
         }
     }
@@ -746,14 +799,10 @@ fn button_react_to_keyboard_or_gamepad_system(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad)>,
     mut commands: Commands,
-    mut interaction_query: Query<
-        (Entity, &Interaction, Option<&SelectedOption>),
-        With<Button>,
-    >,
+    mut interaction_query: Query<(Entity, &Interaction, Option<&SelectedOption>), With<Button>>,
     button_holder_query: Query<(Entity, &Children), With<ButtonsHolder>>,
     mut primary_device: ResMut<PrimaryControlDevice>,
-)
-{
+) {
     let mut movement_vector = Vec2::ZERO;
     let mut confirm_command: bool = false;
 
@@ -764,17 +813,16 @@ fn button_react_to_keyboard_or_gamepad_system(
         movement_vector.y += 1.0;
         primary_device.value = ControlDevice::Keyboard;
     }
-    if keyboard_input.just_pressed(KeyCode::KeyS) || keyboard_input.just_pressed(KeyCode::ArrowDown) {
+    if keyboard_input.just_pressed(KeyCode::KeyS) || keyboard_input.just_pressed(KeyCode::ArrowDown)
+    {
         movement_vector.y -= 1.0;
         primary_device.value = ControlDevice::Keyboard;
     }
 
-    if keyboard_input.just_pressed(KeyCode::Enter) || keyboard_input.just_pressed(KeyCode::Space)
-    {
+    if keyboard_input.just_pressed(KeyCode::Enter) || keyboard_input.just_pressed(KeyCode::Space) {
         confirm_command = true;
         primary_device.value = ControlDevice::Keyboard;
     }
-
 
     for (_entity, gamepad) in &gamepads {
         let just_pressed = gamepad.get_just_pressed().into_iter();
@@ -795,63 +843,60 @@ fn button_react_to_keyboard_or_gamepad_system(
         }
     }
 
-    for (_, children) in button_holder_query
-    {
+    for (_, children) in button_holder_query {
         let mut buttons: Vec<Entity> = Vec::new();
         let mut selected_index = 0;
-        for child in children
-        {
-            for(entity, _, sel) in &mut interaction_query
-            {
-                if child != &entity
-                {
+        for child in children {
+            for (entity, _, sel) in &mut interaction_query {
+                if child != &entity {
                     continue;
                 }
-                if sel.is_some()
-                {
-                    selected_index = buttons.len();     // doing this before adding the element to avoid the subtract one necessity
+                if sel.is_some() {
+                    selected_index = buttons.len(); // doing this before adding the element to avoid the subtract one necessity
                 }
 
                 buttons.push(entity);
             }
         }
 
-        if buttons.len() == 0
-        {
+        if buttons.len() == 0 {
             continue;
         }
 
-        if movement_vector.y > GAMEPAD_STICK_DEADZONE
-        {
-            commands.entity(buttons[selected_index]).remove::<SelectedOption>();
+        if movement_vector.y > GAMEPAD_STICK_DEADZONE {
+            commands
+                .entity(buttons[selected_index])
+                .remove::<SelectedOption>();
 
-            if selected_index == 0
-            {
-                commands.entity(*buttons.last().unwrap()).insert(SelectedOption);
-            }
-            else {
-                commands.entity(buttons[selected_index-1]).insert(SelectedOption);
+            if selected_index == 0 {
+                commands
+                    .entity(*buttons.last().unwrap())
+                    .insert(SelectedOption);
+            } else {
+                commands
+                    .entity(buttons[selected_index - 1])
+                    .insert(SelectedOption);
             }
         }
 
-        if movement_vector.y < -GAMEPAD_STICK_DEADZONE
-        {
-            commands.entity(buttons[selected_index]).remove::<SelectedOption>();
+        if movement_vector.y < -GAMEPAD_STICK_DEADZONE {
+            commands
+                .entity(buttons[selected_index])
+                .remove::<SelectedOption>();
 
-            if selected_index == buttons.len() - 1
-            {
+            if selected_index == buttons.len() - 1 {
                 commands.entity(buttons[0]).insert(SelectedOption);
-            }
-            else {
-                commands.entity(buttons[selected_index+1]).insert(SelectedOption);
+            } else {
+                commands
+                    .entity(buttons[selected_index + 1])
+                    .insert(SelectedOption);
             }
         }
     }
 
     if confirm_command {
         for (entity, _, selected) in &mut interaction_query {
-            if selected.is_none()
-            {
+            if selected.is_none() {
                 continue;
             }
 
@@ -861,11 +906,12 @@ fn button_react_to_keyboard_or_gamepad_system(
 }
 
 fn button_handle_display(
-    mut button_query: Query<(&Interaction, &mut BackgroundColor, Option<&SelectedOption>), With<Button>>,
-)
-{
-    for(interaction, mut background_color, selected) in &mut button_query
-    {
+    mut button_query: Query<
+        (&Interaction, &mut BackgroundColor, Option<&SelectedOption>),
+        With<Button>,
+    >,
+) {
+    for (interaction, mut background_color, selected) in &mut button_query {
         *background_color = match (*interaction, selected) {
             (Interaction::Pressed, Some(_)) => PRESSED_BUTTON.into(),
             (_, Some(_)) => HOVERED_BUTTON.into(),
@@ -933,8 +979,7 @@ fn main_menu_setup(
     commands.spawn((
         DespawnOnExit(AppState::Menu),
         Text::new("LunaticDancer, 2025"),
-        TextFont
-        {
+        TextFont {
             font: font.clone(),
             font_size: (h / 20) as f32,
             ..default()
@@ -951,8 +996,7 @@ fn main_menu_setup(
     commands.spawn((
         DespawnOnExit(AppState::Menu),
         Text::new("v: 0.1.0, made with Bevy"),
-        TextFont
-        {
+        TextFont {
             font: font.clone(),
             font_size: (h / 20) as f32,
             ..default()
@@ -965,7 +1009,6 @@ fn main_menu_setup(
             ..default()
         },
     ));
-
 
     commands.spawn((
         DespawnOnExit(AppState::Menu),
@@ -1018,11 +1061,7 @@ fn main_menu_setup(
                     button_node,
                     BackgroundColor(IDLE_BUTTON),
                     MenuButtonAction::Quit,
-                    children![(
-                        Text::new("Quit"),
-                        button_text_font,
-                        TextColor(TEXT_COLOR),
-                    ),]
+                    children![(Text::new("Quit"), button_text_font, TextColor(TEXT_COLOR),),]
                 ),
             ]
         )],
@@ -1116,17 +1155,12 @@ fn pause_menu_setup(
                     button_node,
                     BackgroundColor(IDLE_BUTTON),
                     MenuButtonAction::Quit,
-                    children![(
-                        Text::new("Quit"),
-                        button_text_font,
-                        TextColor(TEXT_COLOR),
-                    ),]
+                    children![(Text::new("Quit"), button_text_font, TextColor(TEXT_COLOR),),]
                 ),
             ]
         )],
     ));
 }
-
 
 fn game_over_screen_setup(
     mut commands: Commands,
@@ -1146,20 +1180,19 @@ fn game_over_screen_setup(
             justify_content: JustifyContent::Center,
             ..default()
         },
-        children![
-                (
-                    Text::new("GAME OVER"),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: (h / 6) as f32,
-                        ..default()
-                    },
-                    TextColor(TEXT_COLOR),
-                    Node {
-                        margin: UiRect::all(px(12)),
-                        ..default()
-                    },
-                ),],
+        children![(
+            Text::new("GAME OVER"),
+            TextFont {
+                font: font.clone(),
+                font_size: (h / 6) as f32,
+                ..default()
+            },
+            TextColor(TEXT_COLOR),
+            Node {
+                margin: UiRect::all(px(12)),
+                ..default()
+            },
+        ),],
     ));
 }
 
