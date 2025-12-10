@@ -2,9 +2,12 @@ use std::time::Duration;
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
 
 const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
+const PI: f32 = 3.14159265;
 const PLAYER_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5; // how much of the entire screen should the player travel per second
 const BULLET_MOVEMENT_SPEED_NORMALIZED: f32 = 0.4;
 const BULLET_COLOR_OSCILATION_SPEED: f32 = 108.;
+const BULLET_PARTICLE_INTERVAL: f32 = 0.1;
+const TRAIL_PARTICLE_LIFETIME: f32 = 0.7;
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
 const GAMEPAD_AIM_DEADZONE: f32 = 0.5;
@@ -74,12 +77,23 @@ struct Player
 {
     bullet_timer: Timer,
 }
+#[derive(Component)]
+struct TrailParticleSpawner
+{
+    timer: Timer,
+}
 
 #[derive(Component)]
 struct PlayerAim;
 
 #[derive(Component)]
 struct Bullet;
+
+#[derive(Component)]
+struct TrailParticle
+{
+    lifetime: f32,
+}
 
 #[derive(Component)]
 struct ScreenEdgeBouncer
@@ -154,6 +168,8 @@ fn main() {
             handle_score.run_if(in_state(AppState::InGame)),
             oscilate_bullet_colors,
             handle_game_over_continue.run_if(in_state(AppState::GameOver)),
+            spawn_bullet_trail,
+            handle_trail_particles,
         ),
     );
     app.add_systems( PostUpdate, (
@@ -269,6 +285,52 @@ fn make_mouse_invisible(mut cursor_options: Single<&mut bevy::window::CursorOpti
     cursor_options.visible = false;
 }
 
+fn handle_trail_particles(
+    mut commands: Commands,
+    particles: Query<(Entity, &mut Transform, &mut TrailParticle)>,
+    time: Res<Time<Virtual>>,
+)
+{
+    for (entity, mut transform, mut particle) in particles
+    {
+        particle.lifetime -= time.delta_secs();
+        if particle.lifetime < 0.0
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        transform.scale = Vec3::ONE * 0.0.lerp(0.5, particle.lifetime / TRAIL_PARTICLE_LIFETIME);
+    }
+}
+
+fn spawn_bullet_trail(
+    mut commands: Commands,
+    bullet_data: Res<BulletRenderComponents>,
+    bullets: Query<(&Transform, &mut TrailParticleSpawner)>,
+    time: Res<Time<Virtual>>,
+)
+{
+    for (transform, mut spawner) in bullets
+    {
+        spawner.timer.tick(time.delta());
+
+        if !spawner.timer.just_finished()
+        {
+            continue;
+        }
+
+        let initial_position = transform.translation;
+        
+        commands.spawn((
+            TrailParticle{lifetime: TRAIL_PARTICLE_LIFETIME},
+            Mesh2d(bullet_data.mesh.clone()),
+            MeshMaterial2d(bullet_data.material.clone()),
+            Transform::from_translation(initial_position),
+        ));
+    }
+}
+
 fn spawn_bullet(
     mut commands: Commands,
     bullet_data: Res<BulletRenderComponents>,
@@ -291,6 +353,7 @@ fn spawn_bullet(
     
     commands.spawn((
         Bullet,
+        TrailParticleSpawner{timer: Timer::new(Duration::from_secs_f32(BULLET_PARTICLE_INTERVAL), TimerMode::Repeating)},
         Mesh2d(bullet_data.mesh.clone()),
         MeshMaterial2d(bullet_data.material.clone()),
         Transform::from_translation(initial_position),
@@ -1088,7 +1151,7 @@ fn game_over_screen_setup(
                     Text::new("GAME OVER"),
                     TextFont {
                         font: font.clone(),
-                        font_size: (h / 8) as f32,
+                        font_size: (h / 6) as f32,
                         ..default()
                     },
                     TextColor(TEXT_COLOR),
