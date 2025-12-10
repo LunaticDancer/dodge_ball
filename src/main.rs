@@ -12,6 +12,11 @@ const TRAIL_PARTICLE_LIFETIME: f32 = 0.7;
 const COLLISION_PARTICLE_LIFETIME: f32 = 0.5;
 const COLLISION_PARTICLE_COUNT: i32 = 32;
 const COLLISION_PARTICLE_SPEED_NORMALIZED: f32 = 0.3;
+const SCREENSHAKE_VELOCITY: f32 = 213.7;
+const SCREENSHAKE_ON_SHOOT: f32 = 0.007;
+const SCREENSHAKE_ON_BOUNCE: f32 = 0.012;
+const SCREENSHAKE_ON_DEATH: f32 = 0.02;
+const SCREENSHAKE_DAMPENING: f32 = 10.0;
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
 const GAMEPAD_AIM_DEADZONE: f32 = 0.5;
@@ -45,6 +50,11 @@ struct RandomSource(ChaCha8Rng);
 
 #[derive(Resource)]
 struct Score {
+    value: f32,
+}
+
+#[derive(Resource)]
+struct ScreenshakeIntensity {
     value: f32,
 }
 
@@ -148,7 +158,7 @@ fn main() {
     app.insert_resource(Score { value: 0.0 });
     let seeded_rng = ChaCha8Rng::seed_from_u64(2137);
     app.insert_resource(RandomSource(seeded_rng));
-
+    app.insert_resource(ScreenshakeIntensity{value: 0.0});
 
 
     app.add_systems(Startup, init_bullet_data);
@@ -195,6 +205,7 @@ fn main() {
             handle_game_over_continue.run_if(in_state(AppState::GameOver)),
             spawn_bullet_trail,
             handle_trail_particles,
+            handle_screenshake,
         ),
     );
     app.add_systems(
@@ -256,6 +267,19 @@ fn resize_screen_bounds(
             display_properties.h
         };
     }
+}
+
+fn handle_screenshake(
+    mut screenshake: ResMut<ScreenshakeIntensity>,
+    mut camera: Single<&mut Transform, With<Camera2d>>,
+    time: Res<Time<Real>>,
+    display_properties: Res<DisplayProperties>,
+)
+{
+    screenshake.value = screenshake.value.lerp(0.0, (time.delta_secs() * SCREENSHAKE_DAMPENING).min(1.0));
+    let rotation = SCREENSHAKE_VELOCITY * time.elapsed_secs();
+    let dir = Vec2::new(rotation.cos(), rotation.sin());
+    camera.translation = Vec3::new(dir.x, dir.y, 0.0) * screenshake.value * display_properties.shorter_dimension;
 }
 
 fn reset_score(mut score: ResMut<Score>) {
@@ -357,6 +381,7 @@ fn spawn_bullet(
     aim: Single<&Transform, With<PlayerAim>>,
     time: Res<Time<Virtual>>,
     display_properties: Res<DisplayProperties>,
+    mut screenshake: ResMut<ScreenshakeIntensity>,
 ) {
     timer.bullet_timer.tick(time.delta());
 
@@ -383,6 +408,7 @@ fn spawn_bullet(
             velocity: initial_velocity,
         },
     ));
+    screenshake.value += SCREENSHAKE_ON_SHOOT;
 }
 
 fn handle_bounce_particles(
@@ -413,6 +439,7 @@ fn handle_bullet_collision(
     mut time: ResMut<Time<Virtual>>,
     bullet_data: Res<BulletRenderComponents>,
     mut randomness: ResMut<RandomSource>,
+    mut screenshake: ResMut<ScreenshakeIntensity>,
 ) {
     let collision_distance = PLAYER_SIZE * 2.0 * display_properties.shorter_dimension;
     let circle = Circle::new(1.0);
@@ -422,10 +449,12 @@ fn handle_bullet_collision(
         if bullet.translation.distance(player.translation) < collision_distance {
             time.pause();
             game_state.set(AppState::GameOver);
+            screenshake.value += SCREENSHAKE_ON_DEATH;
         }
         if second.translation.distance(player.translation) < collision_distance {
             time.pause();
             game_state.set(AppState::GameOver);
+            screenshake.value += SCREENSHAKE_ON_DEATH;
         }
 
         if bullet.translation.distance(second.translation) > collision_distance {
@@ -439,6 +468,8 @@ fn handle_bullet_collision(
         let dir = (bullet.translation - second.translation).normalize();
         bouncer.velocity = dir;
         bouncerer.velocity = -dir;
+
+        screenshake.value += SCREENSHAKE_ON_BOUNCE;
 
         for _ in 0..COLLISION_PARTICLE_COUNT
         {
