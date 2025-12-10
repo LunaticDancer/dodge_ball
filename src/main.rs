@@ -3,7 +3,8 @@ use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
 
 const MAIN_FONT_PATH: &str = "Doto_Rounded-Bold.ttf";
 const PLAYER_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5; // how much of the entire screen should the player travel per second
-const BULLET_MOVEMENT_SPEED_NORMALIZED: f32 = 0.5;
+const BULLET_MOVEMENT_SPEED_NORMALIZED: f32 = 0.4;
+const BULLET_COLOR_OSCILATION_SPEED: f32 = 108.;
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
 const GAMEPAD_AIM_DEADZONE: f32 = 0.5;
@@ -21,6 +22,7 @@ enum AppState {
     Menu,
     InGame,
     Paused,
+    GameOver,
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash)]
@@ -130,6 +132,7 @@ fn main() {
         despawn_bullets,
         reset_score,
     ));
+    app.add_systems(OnEnter(AppState::GameOver), game_over_screen_setup);
     app.add_systems(OnEnter(AppState::Paused), pause_menu_setup);
     app.add_systems(OnExit(AppState::Menu), (
         spawn_player, 
@@ -149,6 +152,8 @@ fn main() {
             handle_game_pausing,
             spawn_bullet.after(init_bullet_data).run_if(in_state(AppState::InGame)),
             handle_score.run_if(in_state(AppState::InGame)),
+            oscilate_bullet_colors,
+            handle_game_over_continue.run_if(in_state(AppState::GameOver)),
         ),
     );
     app.add_systems( PostUpdate, (
@@ -161,6 +166,7 @@ fn main() {
         move_player_aim,
         clamp_player_aim.after(move_player_aim),
         move_bouncers,
+        handle_bullet_collision,
     ));
 
     app.init_state::<AppState>();
@@ -292,25 +298,56 @@ fn spawn_bullet(
     ));
 }
 
+fn handle_bullet_collision(
+    bullets: Query<&Transform, With<Bullet>>,
+    player: Single<&Transform, With<Player>>,
+    mut game_state: ResMut<NextState<AppState>>,
+    display_properties: Res<DisplayProperties>,
+    mut time: ResMut<Time<Virtual>>,
+)
+{
+    let collision_distance = PLAYER_SIZE * 2.0 * display_properties.shorter_dimension;
+    for bullet in bullets
+    {
+        if bullet.translation.distance(player.translation) < collision_distance
+        {
+            time.pause();
+            game_state.set(AppState::GameOver);
+        }
+    }
+}
+
+fn oscilate_bullet_colors(
+    time: Res<Time<Real>>,
+    bullet_data: Res<BulletRenderComponents>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+)
+{
+    let mat: &mut ColorMaterial = materials.get_mut(bullet_data.material.id()).unwrap();
+    mat.color = Color::hsv(time.elapsed_secs() * BULLET_COLOR_OSCILATION_SPEED, 1., 0.75);
+}
+
 fn move_bouncers(
     bullets: Query<(&mut Transform, &mut ScreenEdgeBouncer)>,
     fixed_time: Res<Time<Fixed>>,
     display_properties: Res<DisplayProperties>,
 )
 {
+    let w_margin = display_properties.half_w - PLAYER_SIZE * display_properties.shorter_dimension;
+    let h_margin = display_properties.half_h - PLAYER_SIZE * display_properties.shorter_dimension;
     for (mut trans, mut bouncer) in bullets
     {
         trans.translation += bouncer.velocity * BULLET_MOVEMENT_SPEED_NORMALIZED * display_properties.shorter_dimension * fixed_time.delta_secs();
 
         if bouncer.velocity.x > 0.0
         {
-            if trans.translation.x > display_properties.half_w
+            if trans.translation.x > w_margin
             {
                 bouncer.velocity.x = - bouncer.velocity.x;
             }            
         }
         else {
-            if trans.translation.x < -display_properties.half_w
+            if trans.translation.x < -w_margin
             {
                 bouncer.velocity.x = - bouncer.velocity.x;
             }  
@@ -318,13 +355,13 @@ fn move_bouncers(
 
         if bouncer.velocity.y > 0.0
         {
-            if trans.translation.y > display_properties.half_h
+            if trans.translation.y > h_margin
             {
                 bouncer.velocity.y = - bouncer.velocity.y;
             }            
         }
         else {
-            if trans.translation.y < -display_properties.half_h
+            if trans.translation.y < -h_margin
             {
                 bouncer.velocity.y = - bouncer.velocity.y;
             }  
@@ -489,6 +526,7 @@ fn clamp_player(mut player: Single<&mut Transform, With<Player>>, display: Res<D
 fn handle_game_pausing(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad)>,
+    mouse_press: Res<ButtonInput<MouseButton>>,
     mut primary_device: ResMut<PrimaryControlDevice>,
     mut time: ResMut<Time<Virtual>>,
     mut game_state: ResMut<NextState<AppState>>,
@@ -517,6 +555,11 @@ fn handle_game_pausing(
         }
     }
 
+    if mouse_press.just_pressed(MouseButton::Left) || mouse_press.just_pressed(MouseButton::Right) {
+        take_action = true;
+        primary_device.value = ControlDevice::Mouse;
+    }
+
     if take_action {
         if *state.get() == AppState::InGame {
             time.pause();
@@ -525,6 +568,44 @@ fn handle_game_pausing(
             time.unpause();
             game_state.set(AppState::InGame);
         }
+    }
+}
+
+fn handle_game_over_continue(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    mut primary_device: ResMut<PrimaryControlDevice>,
+    mut game_state: ResMut<NextState<AppState>>,
+    mut time: ResMut<Time<Virtual>>,
+) {
+    let mut take_action: bool = false;
+    if keyboard_input.just_pressed(KeyCode::Escape)
+        || keyboard_input.just_pressed(KeyCode::Backspace)
+        || keyboard_input.just_pressed(KeyCode::Space)
+        || keyboard_input.just_pressed(KeyCode::Enter)
+    {
+        take_action = true;
+        primary_device.value = ControlDevice::Keyboard;
+    }
+
+    for (_entity, gamepad) in &gamepads {
+        if take_action {
+            break;
+        }
+
+        let just_pressed = gamepad.get_just_pressed().into_iter();
+        for button in just_pressed {
+            if *button == GamepadButton::Select || *button == GamepadButton::Start || *button == GamepadButton::South || *button == GamepadButton::East {
+                take_action = true;
+                primary_device.value = ControlDevice::Gamepad;
+                break;
+            }
+        }
+    }
+
+    if take_action {
+        game_state.set(AppState::Menu);
+        time.unpause();
     }
 }
 
@@ -955,6 +1036,42 @@ fn pause_menu_setup(
                 ),
             ]
         )],
+    ));
+}
+
+
+fn game_over_screen_setup(
+    mut commands: Commands,
+    window: Single<&Window>,
+    asset_server: Res<AssetServer>,
+) {
+    let h = window.resolution.physical_height();
+
+    let font: Handle<Font> = asset_server.load(MAIN_FONT_PATH);
+
+    commands.spawn((
+        DespawnOnExit(AppState::GameOver),
+        Node {
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![
+                (
+                    Text::new("GAME OVER"),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: (h / 8) as f32,
+                        ..default()
+                    },
+                    TextColor(TEXT_COLOR),
+                    Node {
+                        margin: UiRect::all(px(12)),
+                        ..default()
+                    },
+                ),],
     ));
 }
 
