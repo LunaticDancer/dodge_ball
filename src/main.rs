@@ -299,7 +299,7 @@ fn spawn_bullet(
 }
 
 fn handle_bullet_collision(
-    bullets: Query<&Transform, With<Bullet>>,
+    mut bullets: Query<(&Transform, &mut ScreenEdgeBouncer), With<Bullet>>,
     player: Single<&Transform, With<Player>>,
     mut game_state: ResMut<NextState<AppState>>,
     display_properties: Res<DisplayProperties>,
@@ -307,13 +307,38 @@ fn handle_bullet_collision(
 )
 {
     let collision_distance = PLAYER_SIZE * 2.0 * display_properties.shorter_dimension;
-    for bullet in bullets
+
+    let mut iter = bullets.iter_combinations_mut();
+    while let Some(
+        [
+            (bullet, mut bouncer),
+            (second, mut bouncerer),
+        ]
+    ) = iter.fetch_next()
     {
         if bullet.translation.distance(player.translation) < collision_distance
         {
             time.pause();
             game_state.set(AppState::GameOver);
         }
+        if second.translation.distance(player.translation) < collision_distance
+        {
+            time.pause();
+            game_state.set(AppState::GameOver);
+        }
+
+        if bullet.translation.distance(second.translation) > collision_distance
+            {
+                continue;
+            }
+            if bullet.translation.distance(second.translation) < 1.0
+            {
+                continue;
+            }
+
+            let dir = (bullet.translation - second.translation).normalize();
+            bouncer.velocity = dir;
+            bouncerer.velocity = -dir;
     }
 }
 
