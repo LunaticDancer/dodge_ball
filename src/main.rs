@@ -1,5 +1,5 @@
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
-use rand::{SeedableRng};
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::{f32::consts::PI, time::Duration};
 
@@ -14,8 +14,8 @@ const COLLISION_PARTICLE_COUNT: i32 = 32;
 const COLLISION_PARTICLE_SPEED_NORMALIZED: f32 = 0.3;
 const SCREENSHAKE_VELOCITY: f32 = 213.7;
 const SCREENSHAKE_ON_SHOOT: f32 = 0.007;
-const SCREENSHAKE_ON_BOUNCE: f32 = 0.012;
-const SCREENSHAKE_ON_DEATH: f32 = 0.02;
+const SCREENSHAKE_ON_BOUNCE: f32 = 0.007;
+const SCREENSHAKE_ON_DEATH: f32 = 0.01;
 const SCREENSHAKE_DAMPENING: f32 = 10.0;
 const PLAYER_SIZE: f32 = 0.02;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.1;
@@ -158,8 +158,7 @@ fn main() {
     app.insert_resource(Score { value: 0.0 });
     let seeded_rng = ChaCha8Rng::seed_from_u64(2137);
     app.insert_resource(RandomSource(seeded_rng));
-    app.insert_resource(ScreenshakeIntensity{value: 0.0});
-
+    app.insert_resource(ScreenshakeIntensity { value: 0.0 });
 
     app.add_systems(Startup, init_bullet_data);
     app.add_systems(
@@ -274,12 +273,14 @@ fn handle_screenshake(
     mut camera: Single<&mut Transform, With<Camera2d>>,
     time: Res<Time<Real>>,
     display_properties: Res<DisplayProperties>,
-)
-{
-    screenshake.value = screenshake.value.lerp(0.0, (time.delta_secs() * SCREENSHAKE_DAMPENING).min(1.0));
+) {
+    screenshake.value = screenshake
+        .value
+        .lerp(0.0, (time.delta_secs() * SCREENSHAKE_DAMPENING).min(1.0));
     let rotation = SCREENSHAKE_VELOCITY * time.elapsed_secs();
     let dir = Vec2::new(rotation.cos(), rotation.sin());
-    camera.translation = Vec3::new(dir.x, dir.y, 0.0) * screenshake.value * display_properties.shorter_dimension;
+    camera.translation =
+        Vec3::new(dir.x, dir.y, 0.0) * screenshake.value * display_properties.shorter_dimension;
 }
 
 fn reset_score(mut score: ResMut<Score>) {
@@ -382,6 +383,7 @@ fn spawn_bullet(
     time: Res<Time<Virtual>>,
     display_properties: Res<DisplayProperties>,
     mut screenshake: ResMut<ScreenshakeIntensity>,
+    asset_server: Res<AssetServer>,
 ) {
     timer.bullet_timer.tick(time.delta());
 
@@ -408,6 +410,10 @@ fn spawn_bullet(
             velocity: initial_velocity,
         },
     ));
+    commands.spawn((
+            AudioPlayer::new(asset_server.load("Boom29.wav")),
+            PlaybackSettings::DESPAWN,
+        ));
     screenshake.value += SCREENSHAKE_ON_SHOOT;
 }
 
@@ -424,9 +430,14 @@ fn handle_bounce_particles(
             continue;
         }
 
-        transform.scale = Vec3::ONE * ((PI/2.0).lerp(0.0, particle.lifetime / TRAIL_PARTICLE_LIFETIME)).cos() * 0.5;
-        transform.translation += particle.velocity * ((PI/2.0).lerp(0.0, particle.lifetime / TRAIL_PARTICLE_LIFETIME)).cos() 
-            * COLLISION_PARTICLE_SPEED_NORMALIZED * display_properties.shorter_dimension * time.delta_secs();
+        transform.scale = Vec3::ONE
+            * ((PI / 2.0).lerp(0.0, particle.lifetime / TRAIL_PARTICLE_LIFETIME)).cos()
+            * 0.5;
+        transform.translation += particle.velocity
+            * ((PI / 2.0).lerp(0.0, particle.lifetime / TRAIL_PARTICLE_LIFETIME)).cos()
+            * COLLISION_PARTICLE_SPEED_NORMALIZED
+            * display_properties.shorter_dimension
+            * time.delta_secs();
     }
 }
 
@@ -440,6 +451,7 @@ fn handle_bullet_collision(
     bullet_data: Res<BulletRenderComponents>,
     mut randomness: ResMut<RandomSource>,
     mut screenshake: ResMut<ScreenshakeIntensity>,
+    asset_server: Res<AssetServer>,
 ) {
     let collision_distance = PLAYER_SIZE * 2.0 * display_properties.shorter_dimension;
     let circle = Circle::new(1.0);
@@ -450,11 +462,19 @@ fn handle_bullet_collision(
             time.pause();
             game_state.set(AppState::GameOver);
             screenshake.value += SCREENSHAKE_ON_DEATH;
+            commands.spawn((
+                AudioPlayer::new(asset_server.load("Random32.wav")),
+                PlaybackSettings::DESPAWN,
+            ));
         }
         if second.translation.distance(player.translation) < collision_distance {
             time.pause();
             game_state.set(AppState::GameOver);
             screenshake.value += SCREENSHAKE_ON_DEATH;
+            commands.spawn((
+                AudioPlayer::new(asset_server.load("Random32.wav")),
+                PlaybackSettings::DESPAWN,
+            ));
         }
 
         if bullet.translation.distance(second.translation) > collision_distance {
@@ -470,13 +490,19 @@ fn handle_bullet_collision(
         bouncerer.velocity = -dir;
 
         screenshake.value += SCREENSHAKE_ON_BOUNCE;
+        commands.spawn((
+            AudioPlayer::new(asset_server.load("Ball_Flick.wav")),
+            PlaybackSettings::DESPAWN,
+        ));
 
-        for _ in 0..COLLISION_PARTICLE_COUNT
-        {
+        for _ in 0..COLLISION_PARTICLE_COUNT {
             let rng = &mut randomness.0;
             let vel = circle.sample_boundary(rng);
             commands.spawn((
-                BounceParticle{lifetime: COLLISION_PARTICLE_LIFETIME, velocity: Vec3::new(vel.x, vel.y, 0.0)},
+                BounceParticle {
+                    lifetime: COLLISION_PARTICLE_LIFETIME,
+                    velocity: Vec3::new(vel.x, vel.y, 0.0),
+                },
                 Transform::from_translation(average_position),
                 Mesh2d(bullet_data.mesh.clone()),
                 MeshMaterial2d(bullet_data.material.clone()),
@@ -1026,7 +1052,7 @@ fn main_menu_setup(
 
     commands.spawn((
         DespawnOnExit(AppState::Menu),
-        Text::new("v: 0.1.0, made with Bevy"),
+        Text::new("v: 1.0.0, made with Bevy"),
         TextFont {
             font: font.clone(),
             font_size: (h / 20) as f32,
