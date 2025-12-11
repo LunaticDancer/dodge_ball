@@ -1,9 +1,10 @@
 # dodge_ball
 A simple arcade bullet hell game made in Bevy
 
-Font:
+### Font:
 Doto Rounded Bold
 
-Sound Effects:
+### Sound Effects:
 https://freesoundsite.com/sound-collections/tennis-ball-hit-sound-effects/
+
 the rest is made with Bfxr
