@@ -1,4 +1,5 @@
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
+use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::{f32::consts::PI, time::Duration};
@@ -13,8 +14,8 @@ const COLLISION_PARTICLE_LIFETIME: f32 = 0.5;
 const COLLISION_PARTICLE_COUNT: i32 = 32;
 const COLLISION_PARTICLE_SPEED_NORMALIZED: f32 = 0.3;
 const SCREENSHAKE_VELOCITY: f32 = 213.7;
-const SCREENSHAKE_ON_SHOOT: f32 = 0.007;
-const SCREENSHAKE_ON_BOUNCE: f32 = 0.007;
+const SCREENSHAKE_ON_SHOOT: f32 = 0.005;
+const SCREENSHAKE_ON_BOUNCE: f32 = 0.003;
 const SCREENSHAKE_ON_DEATH: f32 = 0.01;
 const SCREENSHAKE_DAMPENING: f32 = 10.0;
 const PLAYER_SIZE: f32 = 0.02;
@@ -384,6 +385,8 @@ fn spawn_bullet(
     display_properties: Res<DisplayProperties>,
     mut screenshake: ResMut<ScreenshakeIntensity>,
     asset_server: Res<AssetServer>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    mut evw_rumble: MessageWriter<GamepadRumbleRequest>,
 ) {
     timer.bullet_timer.tick(time.delta());
 
@@ -411,10 +414,21 @@ fn spawn_bullet(
         },
     ));
     commands.spawn((
-            AudioPlayer::new(asset_server.load("Boom29.wav")),
-            PlaybackSettings::DESPAWN,
-        ));
+        AudioPlayer::new(asset_server.load("Boom29.wav")),
+        PlaybackSettings::DESPAWN,
+    ));
     screenshake.value += SCREENSHAKE_ON_SHOOT;
+
+    for (entity, _gamepad) in &gamepads {
+        evw_rumble.write(GamepadRumbleRequest::Add {
+            gamepad: entity,
+            duration: Duration::from_millis(100),
+            intensity: GamepadRumbleIntensity {
+                strong_motor: 0.1,
+                weak_motor: 0.3,
+            },
+        });
+    }
 }
 
 fn handle_bounce_particles(
@@ -452,6 +466,8 @@ fn handle_bullet_collision(
     mut randomness: ResMut<RandomSource>,
     mut screenshake: ResMut<ScreenshakeIntensity>,
     asset_server: Res<AssetServer>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    mut evw_rumble: MessageWriter<GamepadRumbleRequest>,
 ) {
     let collision_distance = PLAYER_SIZE * 2.0 * display_properties.shorter_dimension;
     let circle = Circle::new(1.0);
@@ -466,6 +482,25 @@ fn handle_bullet_collision(
                 AudioPlayer::new(asset_server.load("Random32.wav")),
                 PlaybackSettings::DESPAWN,
             ));
+    
+            for (entity, _gamepad) in &gamepads {
+                evw_rumble.write(GamepadRumbleRequest::Add {
+                    gamepad: entity,
+                    duration: Duration::from_millis(200),
+                    intensity: GamepadRumbleIntensity {
+                        strong_motor: 0.9,
+                        weak_motor: 0.6,
+                    },
+                });
+                evw_rumble.write(GamepadRumbleRequest::Add {
+                    gamepad: entity,
+                    duration: Duration::from_millis(400),
+                    intensity: GamepadRumbleIntensity {
+                        strong_motor: 0.2,
+                        weak_motor: 0.5,
+                    },
+                });
+            }
         }
         if second.translation.distance(player.translation) < collision_distance {
             time.pause();
@@ -475,6 +510,25 @@ fn handle_bullet_collision(
                 AudioPlayer::new(asset_server.load("Random32.wav")),
                 PlaybackSettings::DESPAWN,
             ));
+    
+            for (entity, _gamepad) in &gamepads {
+                evw_rumble.write(GamepadRumbleRequest::Add {
+                    gamepad: entity,
+                    duration: Duration::from_millis(200),
+                    intensity: GamepadRumbleIntensity {
+                        strong_motor: 0.9,
+                        weak_motor: 0.6,
+                    },
+                });
+                evw_rumble.write(GamepadRumbleRequest::Add {
+                    gamepad: entity,
+                    duration: Duration::from_millis(400),
+                    intensity: GamepadRumbleIntensity {
+                        strong_motor: 0.2,
+                        weak_motor: 0.5,
+                    },
+                });
+            }
         }
 
         if bullet.translation.distance(second.translation) > collision_distance {
