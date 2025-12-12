@@ -784,7 +784,6 @@ fn clamp_player(mut player: Single<&mut Transform, With<Player>>, display: Res<D
 fn handle_game_pausing(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad)>,
-    mouse_press: Res<ButtonInput<MouseButton>>,
     mut primary_device: ResMut<PrimaryControlDevice>,
     mut time: ResMut<Time<Virtual>>,
     mut game_state: ResMut<NextState<AppState>>,
@@ -813,11 +812,6 @@ fn handle_game_pausing(
         }
     }
 
-    if mouse_press.just_pressed(MouseButton::Left) || mouse_press.just_pressed(MouseButton::Right) {
-        take_action = true;
-        primary_device.value = ControlDevice::Mouse;
-    }
-
     if take_action {
         if *state.get() == AppState::InGame {
             time.pause();
@@ -835,6 +829,7 @@ fn handle_game_over_continue(
     mut primary_device: ResMut<PrimaryControlDevice>,
     mut game_state: ResMut<NextState<AppState>>,
     mut time: ResMut<Time<Virtual>>,
+    mouse_press: Res<ButtonInput<MouseButton>>,
 ) {
     let mut take_action: bool = false;
     if keyboard_input.just_pressed(KeyCode::Escape)
@@ -863,6 +858,11 @@ fn handle_game_over_continue(
                 break;
             }
         }
+    }
+
+    if mouse_press.just_pressed(MouseButton::Left) || mouse_press.just_pressed(MouseButton::Right) {
+        take_action = true;
+        primary_device.value = ControlDevice::Mouse;
     }
 
     if take_action {
