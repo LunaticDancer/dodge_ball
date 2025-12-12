@@ -774,9 +774,10 @@ fn move_player(
 }
 
 fn clamp_player(mut player: Single<&mut Transform, With<Player>>, display: Res<DisplayProperties>) {
+    let ps = PLAYER_SIZE * display.shorter_dimension;
     player.translation = Vec3 {
-        x: player.translation.x.clamp(-display.half_w, display.half_w),
-        y: player.translation.y.clamp(-display.half_h, display.half_h),
+        x: player.translation.x.clamp(-display.half_w + ps, display.half_w - ps),
+        y: player.translation.y.clamp(-display.half_h + ps, display.half_h - ps),
         z: 0.,
     }
 }
