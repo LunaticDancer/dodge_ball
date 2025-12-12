@@ -230,9 +230,10 @@ fn main() {
     app.run();
 }
 
-fn app_init(mut commands: Commands, mut game_state: ResMut<NextState<AppState>>) {
+fn app_init(mut commands: Commands, mut game_state: ResMut<NextState<AppState>>, mut window: Single<&mut Window>) {
     commands.spawn((Camera2d::default(), Msaa::Off));
     game_state.set(AppState::Menu);
+    window.resolution.set_scale_factor_override(Some(1.0));
 }
 
 fn init_bullet_data(
