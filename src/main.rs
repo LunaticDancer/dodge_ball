@@ -1112,7 +1112,7 @@ fn main_menu_setup(
 
     commands.spawn((
         DespawnOnExit(AppState::Menu),
-        Text::new("v: 1.0.0, made with Bevy"),
+        Text::new("v: 1.0.1, made with Bevy"),
         TextFont {
             font: font.clone(),
             font_size: (h / 20) as f32,
