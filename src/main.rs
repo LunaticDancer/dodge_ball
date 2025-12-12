@@ -1,3 +1,4 @@
+use bevy::math::FloatPow;
 use bevy::{input::mouse::MouseMotion, prelude::*, window::WindowResized};
 use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
 use rand::SeedableRng;
@@ -92,7 +93,7 @@ struct SelectedOption;
 
 #[derive(Component)]
 struct Player {
-    bullet_timer: Timer,
+    bullet_timer: f32,
 }
 #[derive(Component)]
 struct TrailParticleSpawner {
@@ -387,10 +388,11 @@ fn spawn_bullet(
     asset_server: Res<AssetServer>,
     gamepads: Query<(Entity, &Gamepad)>,
     mut evw_rumble: MessageWriter<GamepadRumbleRequest>,
+    score: Res<Score>,
 ) {
-    timer.bullet_timer.tick(time.delta());
+    timer.bullet_timer -= time.delta_secs();
 
-    if !timer.bullet_timer.just_finished() {
+    if timer.bullet_timer > 0.0 {
         return;
     }
 
@@ -429,6 +431,8 @@ fn spawn_bullet(
             },
         });
     }
+
+    timer.bullet_timer += 0.05.lerp(2.0, (score.value / 10.0).squared().min(1.0));
 }
 
 fn handle_bounce_particles(
@@ -713,7 +717,7 @@ fn spawn_player(
     let material = materials.add(Color::srgb(1., 1., 1.));
     commands.spawn((
         Player {
-            bullet_timer: Timer::new(Duration::from_secs(2), TimerMode::Repeating),
+            bullet_timer: 2.0,
         },
         Mesh2d(mesh),
         MeshMaterial2d(material),
